@@ -1,3 +1,6 @@
 .DS_Store
 .vscode
 data/*
+__pycache__/*
+* copy.ipynb
+pth/*
