@@ -85,6 +85,43 @@ def get_text_emb_soft(model, processor, text, soft_prompt_hidden):
     # normalize so norm is one, good for dot product later
     return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
 
+def get_text_emb_soft_loralt(model, processor, text, soft_prompt_hidden, text_lora_layer):
+    """Just like get_text_emb but for sof prompts,
+    define X as the number of tokens and might differ from text length"""
+    #print(model.text_model, processor.tokenizer)
+    text_model = model.text_model # VIT original
+    text_tokenizer = processor.tokenizer # tokenize the input
+    text_projection = model.text_projection # fc layer
+    text_embedder_inner = text_model.embeddings # OBS this is the inner embedding NOT the one we want
+    # tokenize the text, returns 2 tensors, tokens and attention mask [batch,X+soft]# token len not same as text
+    tokenized_text = text_tokenizer(text, return_tensors='pt', padding=True, truncation = True) # returns tokens and attention mask
+    # add soft prompt--------------
+    # Take out the parts
+    input_ids, attention_mask = tokenized_text['input_ids'].to(device), tokenized_text['attention_mask'].to(device)
+    attention_mask = attention_mask
+    # get only hiddden states, this is before textTransformer is applied
+    hidden_states= text_embedder_inner(input_ids) #torch.Size([batch_size, X, 512])
+    batch_size = hidden_states.size(0)
+    # adding vectors to the embedding torch.Size([4, X+softprompts, 512])
+    expand_hidden = soft_prompt_hidden.unsqueeze(0).expand(batch_size, -1, -1)
+    hidden_states = torch.cat([expand_hidden.to(device), hidden_states], dim=1)
+    # must match the shape
+    soft_prompt_attention_mask = torch.ones(batch_size, soft_prompt_hidden.shape[0], dtype=attention_mask.dtype)
+    attention_mask = torch.cat([soft_prompt_attention_mask.to(device), attention_mask], dim=1)# just ones
+    #end of soft prompt--------------
+    # apply costum transformer snd project to latent space  dim [batch, 512]
+    text_latent = forward_text(input_ids, attention_mask, hidden_states, text_model)
+    # project to same dim as text emb by FC layer [batch, 512] unneccessary???
+
+    # Almost same thing as adding Lora to Last Transform Layer in projection attention layer
+    # we can remove this if we want and just add it in the loop when creating Lora layers for the attention layers
+    text_latent = text_lora_layer(text_latent)
+    text_embeds = text_projection(text_latent) #[batch, 512] to [batch, 512] same
+
+    # TODO add LORA
+    # normalize so norm is one, good for dot product later
+    return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
+
 def forward_text(input_ids, attention_mask, hidden_states, text_model):
     """Modified forward pass of the text model TRANSFORMER to include soft prompts"""
     #print(text_model) # prints the architecture
