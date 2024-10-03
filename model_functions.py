@@ -89,6 +89,7 @@ def get_text_emb_soft_loralt(model, processor, text, soft_prompt_hidden, text_lo
     """Just like get_text_emb but for sof prompts,
     define X as the number of tokens and might differ from text length"""
     #print(model.text_model, processor.tokenizer)
+    device = model.device
     text_model = model.text_model # VIT original
     text_tokenizer = processor.tokenizer # tokenize the input
     text_projection = model.text_projection # fc layer
