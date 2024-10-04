@@ -5,6 +5,9 @@ from torch.utils.data import Dataset
 from torchvision import transforms
 from model_functions import get_image_emb
 from PIL import Image, ImageOps
+import random
+from collections import Counter
+
 
 class HMDataset2(Dataset):
     def __init__(self, articles_csv, image_dir, main_class, processor, model, transform=None):
@@ -100,3 +103,58 @@ class UniformHMDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.emb[idx], self.labels[idx], self.image[idx]
+    
+
+
+def split(labels0, image_emb0, images0, n_samples, set_sizes):
+  """Given trainingdata splits it into train/val/test"""
+  combined = sorted(zip(labels0, image_emb0, images0), key=lambda x: x[0])
+  labels, image_emb, images = zip(*combined)
+
+  train_labels, train_image_emb, train_images = [], [], []
+  test_labels, test_image_emb, test_images = [], [], []
+  val_labels, val_image_emb, val_images = [], [], []
+
+  for i in range(0, len(combined) - 1, n_samples):
+      labels_sub = labels[i : i + n_samples]
+      image_emb_sub = image_emb[i : i + n_samples]
+      images_sub = images[i : i + n_samples]
+
+      s = lambda t: int(float(len(labels_sub)) * set_sizes[t])
+
+      train_labels.extend(labels_sub[:s("train")])
+      train_image_emb.extend(image_emb_sub[:s("train")])
+      train_images.extend(images_sub[:s("train")])
+
+      test_labels.extend(labels_sub[s("train"):s("train") + s("test")])
+      test_image_emb.extend(image_emb_sub[s("train"):s("train") + s("test")])
+      test_images.extend(images_sub[s("train"):s("train") + s("test")])
+
+      val_labels.extend(labels_sub[s("train") + s("test"):])
+      val_image_emb.extend(image_emb_sub[s("train") + s("test"):])
+      val_images.extend(images_sub[s("train") + s("test"):])
+
+  # shuffle the data in each set
+  def shuffle_set(labels, image_emb, images):
+      combined = list(zip(labels, image_emb, images))
+      random.shuffle(combined)
+      return zip(*combined)
+
+  train_labels, train_image_emb, train_images = shuffle_set(train_labels, train_image_emb, train_images)
+  test_labels, test_image_emb, test_images = shuffle_set(test_labels, test_image_emb, test_images)
+  val_labels, val_image_emb, val_images = shuffle_set(val_labels, val_image_emb, val_images)
+
+  # create the datasets
+  dataset = UniformHMDataset(labels, image_emb, images)
+  dataset_train = UniformHMDataset(train_image_emb, train_labels, train_images)
+  dataset_test = UniformHMDataset(test_image_emb, test_labels, test_images)
+  dataset_val = UniformHMDataset(val_image_emb, val_labels, val_images)
+
+  # checking
+  print(len(labels), len(dataset_train.labels), len(dataset_test.labels), len(dataset_val.labels))
+  #print(dataset_train.labels)
+
+  # check class-balance of splits
+  for labels_ in [labels, dataset_train.labels, dataset_val.labels, dataset_test.labels]:
+      print(Counter(labels_))
+  return dataset, dataset_train, dataset_test, dataset_val
