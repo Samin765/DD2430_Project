@@ -6,7 +6,7 @@ from sklearn.metrics import classification_report
 import seaborn as sns
 from sklearn.metrics import confusion_matrix
 import matplotlib.pyplot as plt
-import tqdm as tqdm
+from tqdm import tqdm
 
 def show_images(X):
     """Given images as tensor shows them"""

@@ -1,7 +1,7 @@
 import torch
 import matplotlib.pyplot as plt
 import numpy as np
-import tqdm as tqdm
+from tqdm import tqdm
 import utils, model_functions
 import torch.nn as nn
 
