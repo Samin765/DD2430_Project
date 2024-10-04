@@ -24,7 +24,7 @@ def get_image_emb(model, processor, images, normalize=True):
     if normalize:
         image_embeds = image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True)
 
-    return normalize, prosessed_images
+    return image_embeds, prosessed_images
 
 def get_text_emb(model, processor, text, normalize=True):
     """Given an tensor of batch text returns the batch text embeddings [batch, 512],
