@@ -36,6 +36,8 @@ class HMDataset2(Dataset):
 
         self.processor.feature_extractor.do_rescale = False # # make sure image values: False=> [0-1] and True=> [0,255]
 
+        self.pcodes=set()# to not have doubles
+
     def __len__(self):
         return self.len
 
@@ -50,7 +52,11 @@ class HMDataset2(Dataset):
           id = self.articles['article_id'][idx]
           subclass_name = self.articles[self.main_class][idx]
 
-          if self.counts[subclass_name] < self.max_counts:
+          not_filled = self.counts[subclass_name] < self.max_counts # BOOL balanced sets
+          p_code = self.articles['product_code'][idx]
+          duplicates = p_code in self.pcodes # BOOL same cloathing shape
+          if not_filled and not duplicates:
+              self.pcodes.add(p_code)
               image_path = f"{self.image_dir}/0{str(id)[0:2]}/0{id}.jpg"
 
               try:
