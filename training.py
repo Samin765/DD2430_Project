@@ -31,7 +31,7 @@ class FinetuneCLIP():
       self.loss['train'].append(running_loss/len(self.dataloaders['train'])/len(labels))
       if self.earlystop():
         self.load_p()# get best found
-        return self.loss
+        return self.loss, self.train_p
 
   def forward(self, image_embeds, labels):
     """Get predictions of the model, add more here for different tuning methods"""
