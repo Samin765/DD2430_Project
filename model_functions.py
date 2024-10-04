@@ -3,7 +3,7 @@ from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask, _c
 from transformers.models.clip.modeling_clip import clip_loss
 
 # Needed to create the dataset
-def get_image_emb(model, processor, images):
+def get_image_emb(model, processor, images, normalize=True):
     """Given an tensor of batch images returns the batch image embeddings [batch, 512]"""
 
     #print(model.vision_model, processor.image_processor)
@@ -21,9 +21,12 @@ def get_image_emb(model, processor, images):
     image_embeds = visual_projection(vision_latent)
 
     # normalize so norm is one, good for dot product later
-    return image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True), prosessed_images
+    if normalize:
+        image_embeds = image_embeds / image_embeds.norm(p=2, dim=-1, keepdim=True)
 
-def get_text_emb(model, processor, text):
+    return normalize, prosessed_images
+
+def get_text_emb(model, processor, text, normalize=True):
     """Given an tensor of batch text returns the batch text embeddings [batch, 512],
     define X as the number of tokens and might differ from text length"""
     #print(model.text_model, processor.tokenizer)
@@ -38,10 +41,14 @@ def get_text_emb(model, processor, text):
     text_embeds = text_projection(text_latent) #[batch, 512] to [batch, 512] same
     # TODO add LORA
     # normalize so norm is one, good for dot product later
-    return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
+    return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True) if normalize else text_embeds
 
-def apply_clip(text_embeds, image_embeds, model, train=False):
+def apply_clip(text_embeds, image_embeds, model, train=False, normalize_inputs=False):
     """Forward pass of clip"""
+    if normalize_inputs:
+        text_embeds /= text_embeds.norm(p=2, dim=-1, keepdim=True)
+        image_embeds /= image_embeds.norm(p=2, dim=-1, keepdim=True)
+
     device = model.device # use gpu
     logit_scale = model.logit_scale.exp().to(device) # temperature param
     text_embeds, image_embeds = text_embeds.to(device), image_embeds.to(device)
@@ -118,8 +125,6 @@ def get_text_emb_soft_loralt(model, processor, text, soft_prompt_hidden, text_lo
     # we can remove this if we want and just add it in the loop when creating Lora layers for the attention layers
     text_latent = text_lora_layer(text_latent)
     text_embeds = text_projection(text_latent) #[batch, 512] to [batch, 512] same
-
-    # TODO add LORA
     # normalize so norm is one, good for dot product later
     return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
 
