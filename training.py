@@ -20,15 +20,16 @@ class FinetuneCLIP():
     """Training loop"""
     self.clip['m'].train()
     for epoch in tqdm(range(self.conf['epochs'])):
-      running_loss = 0.0
+      running_loss, n_data = 0.0, 0
       for batch_nr, (image_embeds, labels, images) in enumerate(self.dataloaders['train']):
         self.optimizer.zero_grad()
-        logits_per_image, loss = self.forward(image_embeds, labels)
+        _, loss = self.forward(image_embeds, labels)
         loss.backward()
         self.optimizer.step()
         running_loss +=loss.item()
+        n_data += len(labels)
         #print(self.train_p['soft'].grad)
-      self.loss['train'].append(running_loss/len(self.dataloaders['train'])/len(labels))
+      self.loss['train'].append(running_loss/n_data)
       if self.earlystop():
         self.load_p()# get best found
         return self.loss, self.train_p
@@ -71,11 +72,12 @@ class FinetuneCLIP():
   def earlystop(self):
     """Stop training when val loss start to increase"""
     with torch.no_grad():
-      running_loss = 0.0
+      running_loss, n_data = 0.0, 0 # last batch can be smaller
       for batch_nr, (image_embeds, labels, images) in enumerate(self.dataloaders['val']):# val loader
           _, loss = self.forward(image_embeds, labels)
           running_loss +=loss.item()
-      self.loss['val'].append(running_loss/len(self.dataloaders['val'])/len(labels))
+          n_data += len(labels)
+      self.loss['val'].append(running_loss/n_data)
       if len(self.loss['val'])>2:# early stop
           if self.es['curr_pat'] ==0:
               if running_loss> self.loss['val'][-2]: # if val_loss increase
