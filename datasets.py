@@ -64,17 +64,6 @@ class HMDataset2(Dataset):
 
               try:
                   image = Image.open(image_path)
-
-                  # get border color
-                  # only gets the first pixel, but it's good enough
-                  im_matrix = np.array(image)
-                  r,g,b = im_matrix[0][0]
-
-                  # rezise and add padding
-                  image.thumbnail((200, 200), Image.LANCZOS)
-                  padding = (200 - image.size[0], 200 - image.size[1])
-                  image = ImageOps.expand(image, (padding[0]//2, padding[1]//2, (padding[0]+1)//2, (padding[1]+1)//2), fill=(r,g,b))
-
                   image_tensor = self.transform(image)
 
                   with torch.no_grad():
