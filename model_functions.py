@@ -24,7 +24,7 @@ class LoraLayer(nn.Module):
 
 
 class LoRALayerAttn(nn.Module):
-    def __init__(self, original_attention_layer, r=64, alpha=32, layer = 0):
+    def __init__(self, original_attention_layer, r=64, alpha=1, layer = 0):
         super(LoRALayerAttn, self).__init__()
         self.original_attention_layer = original_attention_layer
 
@@ -51,7 +51,7 @@ class LoRALayerAttn(nn.Module):
         self.register_parameter('lora_B', self.lora_B)
 
         # Scaling factor
-        self.scaling = alpha / r
+        self.scaling = alpha
 
 
     def forward(self, x):
@@ -63,7 +63,7 @@ class LoRALayerAttn(nn.Module):
         #self.lora_B = self.lora_B.to(device)
 
 
-        return self.original_attention_layer(x) + (x @ self.lora_B.to(x.device) @ self.lora_A.to(x.device)) # ensure lora_A and lora_B are on the same device as x
+        return self.original_attention_layer(x) + ((x @ self.lora_B.to(x.device) @ self.lora_A.to(x.device)) * self.scaling) # ensure lora_A and lora_B are on the same device as x
 ######################################################################################
 
 # Needed to create the dataset
