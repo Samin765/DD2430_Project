@@ -129,7 +129,7 @@ class FinetuneCLIP():
 
       self.optimizer = torch.optim.Adam([self.train_p['soft']], lr=1e-3)
     if self.tt['LoRA']:
-      self.train_p['LoRA'] = lora_params_attention
+      self.train_p['LoRA'] = params['LoRA']
       lr = params.get('lr', 1e-4) 
       weight_decay = params.get('weight_decay', 0.001) 
 
