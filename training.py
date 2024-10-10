@@ -31,8 +31,11 @@ class FinetuneCLIP():
         #print(self.train_p['soft'].grad)
       self.loss['train'].append(running_loss/n_data)
       if self.earlystop():
-        self.load_p()# get best found
-        return self.loss, self.train_p
+        if self.tt['soft']:
+          self.load_p()# get best found
+          return self.loss, self.train_p
+
+        return self.loss
 
   def forward(self, image_embeds, labels):
     """Get predictions of the model, add more here for different tuning methods"""
@@ -44,7 +47,8 @@ class FinetuneCLIP():
       logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)
     
     elif self.tt['LoRA']:
-      pass
+      text_embeds = model_functions.get_text_emb(self.clip['m'], self.clip['p'], text)
+      logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)
     else:
       text_embeds = model_functions.get_text_emb(self.clip['m'], self.clip['p'], text)
       logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)
@@ -66,7 +70,7 @@ class FinetuneCLIP():
             images = utils.return_normal(images, self.clip['p'], 4, True)
     all_predictions, all_labels=torch.cat(all_predictions).cpu(), torch.tensor(all_labels).cpu()
     acc = utils.accuracy(all_predictions, all_labels)
-    print('Accuracy',acc)
+    print('Accuracyasdasdas',acc)
     return all_predictions, all_labels, acc
 
   def earlystop(self):
@@ -82,7 +86,8 @@ class FinetuneCLIP():
           if self.es['curr_pat'] ==0:
               if running_loss> self.loss['val'][-2]: # if val_loss increase
                   self.es['min_loss'] = running_loss
-                  torch.save(self.train_p['soft'], 'soft_prompts.pth')
+                  if self.tt['soft']:
+                    torch.save(self.train_p['soft'], 'soft_prompts.pth')
                   self.es['curr_pat']+=1
           else:
               if running_loss> self.es['min_loss']: # if val_loss continute to increase
@@ -113,7 +118,9 @@ class FinetuneCLIP():
 
   def initialize(self, params):
     """Initialize trainable parameters"""
-    self.train_p['add'] = params['add'] # the text added to classes
+    added_text = params.get('add', '') 
+
+    self.train_p['add'] = added_text # the text added to classes
 
     if self.tt['soft']:
       self.train_p['soft'] = nn.Parameter(torch.zeros(params['num_soft'],
@@ -122,4 +129,17 @@ class FinetuneCLIP():
 
       self.optimizer = torch.optim.Adam([self.train_p['soft']], lr=1e-3)
     if self.tt['LoRA']:
-      pass
+      self.train_p['LoRA'] = lora_params_attention
+      lr = params.get('lr', 1e-4) 
+      weight_decay = params.get('weight_decay', 0.001) 
+
+      self.optimizer = torch.optim.Adam(params['LoRA'], lr=lr, weight_decay=weight_decay)
+  
+
+  def count_parameters(self):
+    if self.optimizer is None or not self.optimizer.param_groups:
+        print("Optimizer has no parameters")
+        return
+
+    num_params = sum(p.numel() for p in self.optimizer.param_groups[0]['params'])
+    print(f'Total number of parameters in the optimizer: {num_params}')
