@@ -6,11 +6,11 @@ import utils, model_functions
 import torch.nn as nn
 
 class FinetuneCLIP():
-  def __init__(self, dataloaders, clip):
+  def __init__(self, dataloaders, clip, epochs = 200):
     self.dataloaders = dataloaders
     self.loss = {'train':[], 'val':[]}
     self.es = {'pat': 10, 'curr_pat' :0, 'min_loss': np.inf}# early stop
-    self.conf ={'epochs':200 }
+    self.conf ={'epochs': epochs }
     self.clip = clip # model and processor
     self.train_p = {} # Store trainable parameters here
     self.tt = {'soft':1, 'LoRA':0} # tuning method to use
