@@ -2,6 +2,69 @@ import torch
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask, _create_4d_causal_attention_mask
 from transformers.models.clip.modeling_clip import clip_loss
 
+######################################################################################
+class LoraLayer(nn.Module):
+    def __init__(self, input_dim, output_dim, rank=4, alpha=16, dropout_rate=0.0):
+        super(LoraLayer, self).__init__()
+        self.rank = rank
+        self.alpha = alpha
+
+        self.W_A = nn.Parameter(torch.randn(input_dim, rank))
+        self.W_B = nn.Parameter(torch.randn(rank, output_dim))
+        #self.dropout = nn.Dropout(dropout_rate)
+
+    def forward(self, x):
+      # Forwad pass without ORIGINAL Layer
+        x = x.to(self.W_A.device)  # Move x to the same device as A and B
+
+        return x @ self.W_A @ self.W_B
+######################################################################################
+######################################################################################
+
+
+class LoRALayerAttn(nn.Module):
+    def __init__(self, original_attention_layer, r=64, alpha=32, layer = 0):
+        super(LoRALayerAttn, self).__init__()
+        self.original_attention_layer = original_attention_layer
+
+        #in_features, out_features = original_layer.weight.size()
+        d_model = 512
+
+        #self.lora_A = nn.Parameter(torch.randn(r, d_model)).to(device)
+        #self.lora_B = nn.Parameter(torch.randn(d_model, r)).to(device)
+        #print("check")
+       # Create new lora_A and lora_B tensors for each layer
+        self.lora_A = nn.Parameter(torch.randn(r, d_model))
+        self.lora_B = nn.Parameter(torch.randn(d_model, r))
+
+        # Apply Xavier initialization
+        nn.init.xavier_uniform_(self.lora_A)
+        nn.init.xavier_uniform_(self.lora_B)
+        # Dynamically generate parameter names based on the layer index
+        a_string = 'lora_A' + str(layer)
+        b_string = 'lora_B' + str(layer)
+        #print(a_string)
+
+        # Register lora_A and lora_B as parameters for this specific layer
+        self.register_parameter('lora_A', self.lora_A)
+        self.register_parameter('lora_B', self.lora_B)
+
+        # Scaling factor
+        self.scaling = alpha / r
+
+
+    def forward(self, x):
+        # Forward pass with original layer and LoRA
+        #device = x.device  # Get the device of the input tensor
+
+        # Move Lora parameters to the correct device
+        #self.lora_A = self.lora_A.to(device)
+        #self.lora_B = self.lora_B.to(device)
+
+
+        return self.original_attention_layer(x) + (x @ self.lora_B.to(x.device) @ self.lora_A.to(x.device)) # ensure lora_A and lora_B are on the same device as x
+######################################################################################
+
 # Needed to create the dataset
 def get_image_emb(model, processor, images, normalize=True):
     """Given an tensor of batch images returns the batch image embeddings [batch, 512]"""
