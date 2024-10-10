@@ -173,3 +173,15 @@ def apply_lora_to_transformer(transformer_layers, lora_layers, ranks):
               ])
       
   return lora_layers
+    
+def get_lora_params(model, print_layer = True):
+  for param in model.parameters():
+      param.requires_grad = False
+  for name, param in model.named_parameters():
+      if 'lora' in name:
+          if print_layer:
+              print(name)
+          param.requires_grad = True
+
+  lora_params_attention = [param for param in model.parameters() if param.requires_grad]
+  return lora_params_attention
