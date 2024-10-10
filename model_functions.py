@@ -1,4 +1,5 @@
 import torch
+import torch.nn as nn
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask, _create_4d_causal_attention_mask
 from transformers.models.clip.modeling_clip import clip_loss
 
