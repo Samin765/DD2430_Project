@@ -150,3 +150,26 @@ def forward_text(input_ids, attention_mask, hidden_states, text_model):
         torch.arange(last_hidden_state.shape[0], device=last_hidden_state.device),
         input_ids.view(-1, input_shape[-1]).to(dtype=torch.int, device=last_hidden_state.device).argmax(dim=-1),]
     return pooled_output
+    
+def apply_lora_to_transformer(transformer_layers, lora_layers, ranks):
+    # Ranks is a list where each index represent the specific transformation layer and the Int represent the rank of the new lora layer
+
+
+  for i, layer in enumerate(transformer_layers):
+          rank = ranks[i]  
+
+          if rank > 0:  # Apply LoRA only if rank > 0
+              layer.self_attn.q_proj = LoRALayerAttn(original_attention_layer=layer.self_attn.q_proj, r=rank)
+              layer.self_attn.k_proj = LoRALayerAttn(original_attention_layer=layer.self_attn.k_proj, r=rank)
+              layer.self_attn.v_proj = LoRALayerAttn(original_attention_layer=layer.self_attn.v_proj, r=rank)
+              layer.self_attn.out_proj = LoRALayerAttn(original_attention_layer=layer.self_attn.out_proj, r=rank)
+
+              # Store the applied LoRA layers for each projection
+              lora_layers.extend([
+                  layer.self_attn.q_proj,
+                  layer.self_attn.k_proj,
+                  layer.self_attn.v_proj,
+                  layer.self_attn.out_proj
+              ])
+      
+  return lora_layers
