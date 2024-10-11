@@ -13,8 +13,11 @@ class FinetuneCLIP():
     self.conf ={'epochs': epochs }
     self.clip = clip # model and processor
     self.train_p = {} # Store trainable parameters here
-    self.tt = {'soft':1, 'LoRA':0} # tuning method to use
+    self.tt = {'soft':1, 'LoRA':0 , 'image_fc': 0} # tuning method to use
     self.optimizer = None # config in initialize
+    self.image_fc = None # config in initialize
+    self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
 
   def train(self):
     """Training loop"""
@@ -43,12 +46,21 @@ class FinetuneCLIP():
     text = [self.train_p['add']+i for i in labels]
     #image_embeds, _ = get_image_emb(model, processor, return_normal(images, processor, 0, False)) #SLOW
     if self.tt['soft']:
-      text_embeds = model_functions.get_text_emb_soft(self.clip['m'], self.clip['p'], text, self.train_p['soft'])
-      logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)
-    
+      if self.tt['image_fc']:
+        image_embeds = self.image_fc(image_embeds)
+        text_embeds = model_functions.get_text_emb_soft(self.clip['m'], self.clip['p'], text, self.train_p['soft'])
+        logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)
+      else:
+        text_embeds = model_functions.get_text_emb_soft(self.clip['m'], self.clip['p'], text, self.train_p['soft'])
+        logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)   
     elif self.tt['LoRA']:
-      text_embeds = model_functions.get_text_emb(self.clip['m'], self.clip['p'], text)
-      logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)
+      if self.tt['image_fc']:
+        image_embeds = self.image_fc(image_embeds)
+        text_embeds = model_functions.get_text_emb(self.clip['m'], self.clip['p'], text)
+        logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)
+      else:
+        text_embeds = model_functions.get_text_emb(self.clip['m'], self.clip['p'], text)
+        logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)
     else:
       text_embeds = model_functions.get_text_emb(self.clip['m'], self.clip['p'], text)
       logits_per_image, loss = model_functions.apply_clip(text_embeds, image_embeds, self.clip['m'], train=train)
@@ -126,14 +138,22 @@ class FinetuneCLIP():
       self.train_p['soft'] = nn.Parameter(torch.zeros(params['num_soft'],
                 self.clip['m'].text_projection.in_features), requires_grad=True)
       
+      if self.tt['image_fc']:
+        self.image_fc = nn.Linear(512, 512).to(self.device)
+        self.optimizer = torch.optim.Adam([self.train_p['soft']] + list(self.image_fc.parameters()), lr=1e-3)
+      else:
+        self.optimizer = torch.optim.Adam([self.train_p['soft']], lr=1e-3)
 
-      self.optimizer = torch.optim.Adam([self.train_p['soft']], lr=1e-3)
     if self.tt['LoRA']:
       self.train_p['LoRA'] = params['LoRA']
-      lr = params.get('lr', 1e-4) 
+      lr = params.get('lr', 1e-5) 
       weight_decay = params.get('weight_decay', 0.001) 
 
-      self.optimizer = torch.optim.Adam(params['LoRA'], lr=lr, weight_decay=weight_decay)
+      if self.tt['image_fc']:
+        self.image_fc = nn.Linear(512, 512).to(self.device)
+        self.optimizer = torch.optim.Adam(params=list(self.image_fc.parameters()) + list(params['LoRA']), lr=lr, weight_decay=weight_decay)
+      else: 
+        self.optimizer = torch.optim.Adam(params['LoRA'], lr=lr, weight_decay=weight_decay)
   
 
   def count_parameters(self):
