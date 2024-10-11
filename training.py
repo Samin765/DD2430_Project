@@ -47,6 +47,9 @@ class FinetuneCLIP():
         train = True if image_embeds.shape[0] == len(labels) else False
         text = [self.train_p['add']+i for i in labels]
         # image_embeds, _ = get_image_emb(model, processor, return_normal(images, processor, 0, False)) #SLOW
+
+        # image_fc is just adding a fc layer to the image embeddings
+        # so we can do that before soft and lora because they are only applied to text
         if self.tt['image_fc']:
             image_embeds = self.image_fc(image_embeds)
 

@@ -92,8 +92,6 @@ class UniformHMDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.emb[idx], self.labels[idx], self.image[idx]
-    
-
 
 def split(labels0, image_emb0, images0, n_samples, set_sizes):
   """Given trainingdata splits it into train/val/test"""
