@@ -41,7 +41,7 @@ def confussion_matrix(labels, pred_lab, categories, F1=True):
     acc = accuracy(pred_lab, labels)
     if F1:
         print(classification_report(pred_lab, labels))  # F1
-    plt.figure(figsize=(8, 8))
+    plt.figure(figsize=(6, 6))
     cm = confusion_matrix(labels, pred_lab)
     annot = np.where(cm != 0, cm, '')
     sns.heatmap(cm, annot=annot, fmt="", cmap="Blues", cbar=True,

@@ -7,9 +7,13 @@ from model_functions import get_image_emb
 from PIL import Image, ImageOps
 import random
 from collections import Counter
+import os
+from torch.utils.data import DataLoader
 
 
-class HMDataset2(Dataset):
+
+
+class HMDataset(Dataset):
     def __init__(self, articles_csv, image_dir, main_class, processor, model, transform=None):
         # Load the CSV files
         self.articles = pd.read_csv(articles_csv)
@@ -50,7 +54,7 @@ class HMDataset2(Dataset):
     def __len__(self):
         return self.len
 
-    def get_n_of_each(self, max_counts):
+    def get_n_of_each(self, max_counts, allow_duplicates=False):
         """Collects max_counts datapoints from each subclass in large dataset"""
         self.max_counts = max_counts
         all_embeds = []
@@ -65,24 +69,26 @@ class HMDataset2(Dataset):
             not_filled = self.counts[subclass_name] < self.max_counts
             p_code = self.articles['product_code'][idx]
             duplicates = p_code in self.pcodes  # BOOL same cloathing shape
-            if not_filled and not duplicates:
-                self.pcodes.add(p_code)
-                image_path = f"{self.image_dir}/0{str(id)[0:2]}/0{id}.jpg"
+            if not_filled:
+                if not duplicates or allow_duplicates:
+                    self.pcodes.add(p_code)
+                    image_path = f"{self.image_dir}/0{str(id)[0:2]}/0{id}.jpg"
 
-                try:
-                    image = Image.open(image_path)
-                    image_tensor = self.transform(image)
+                    try:
+                        image = Image.open(image_path)
+                        image_tensor = self.transform(image)
 
-                    with torch.no_grad():
-                        image_embeds, processed_images = get_image_emb(
-                            self.model, self.processor, image_tensor)
+                        with torch.no_grad():
+                            image_embeds, processed_images = get_image_emb(
+                                self.model, self.processor, image_tensor)
 
-                    self.counts[subclass_name] += 1
-                    all_embeds.append(image_embeds)
-                    all_labels.append(subclass_name)
-                    all_images.append(processed_images)
-                except FileNotFoundError:
-                    print(f"Image for article {id} not found. Takes next")
+                        self.counts[subclass_name] += 1
+                        all_embeds.append(image_embeds)
+                        all_labels.append(subclass_name)
+                        all_images.append(processed_images)
+                    except FileNotFoundError:
+                        pass
+                        #print(f"Image for article {id} not found. Takes next")
 
         return torch.cat(all_embeds), all_labels, torch.cat(all_images)
 
@@ -102,6 +108,49 @@ class UniformHMDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.emb[idx], self.labels[idx], self.image[idx]
+
+    
+def create_dataset(n_samples, main_class, subclasses, clip, path, device, allow_duplicates=False, exclude=True):
+    """Create balanced dataset, if exclude it includes only the given subclasses, else excludes"""
+    dataset = HMDataset(
+        articles_csv = path['hm'] + 'articles.csv',
+        image_dir = path['hm']+ 'images',
+        main_class = main_class,
+        model = clip['m'].to(device),
+        processor = clip['p'])
+    assert n_samples >=10, 'Must be have more than 10 for val splits'
+    assert dataset.articles[dataset.main_class].value_counts().min()>=n_samples, 'Can not make balanced set'
+    if exclude:
+        for exclude_subclass in subclasses:
+            dataset.counts[exclude_subclass]=n_samples
+    else:
+        for exclude_subclass in dataset.sub_classes:
+            dataset.counts[exclude_subclass]=n_samples
+        for include_subclass in subclasses:
+            dataset.counts[include_subclass]=0
+    image_emb, labels, images = dataset.get_n_of_each(n_samples, allow_duplicates)
+    data_to_save = {
+        'image_embedding': image_emb,
+        'class_text': labels,
+        'images': images}
+    os.makedirs(path['save'], exist_ok=True)
+    print(Counter(labels))
+    torch.save(data_to_save, f"{path['save']}HM_data_{n_samples}_{main_class}_{len(subclasses)}.pth")
+    return dataset # to get all classes
+        
+               
+def load_dataset(n_samples, main_class, len_subclasses, path):        
+    loaded_data = torch.load( f"{path['save']}HM_data_{n_samples}_{main_class}_{len_subclasses}.pth",
+                            weights_only=True)
+    return loaded_data
+
+def generate_train_test_val(labels, image_emb, images, batch_size, n_samples, set_sizes):
+    """Generate train_test_val sets that are balanced""" 
+    dataset, dataset_train, dataset_test, dataset_val = split(labels, image_emb, images, n_samples, set_sizes)
+    dataloader_train = DataLoader(dataset_train, batch_size=batch_size, shuffle=True)
+    dataloader_val = DataLoader(dataset_val, batch_size=batch_size, shuffle=False)
+    dataloader_test = DataLoader(dataset_test, batch_size=batch_size, shuffle=False)
+    return {'train':dataloader_train, 'val':dataloader_val, 'test':dataloader_test}
 
 
 def split(labels0, image_emb0, images0, n_samples, set_sizes):

@@ -91,8 +91,7 @@ def get_image_emb(model, processor, images, normalize=True):
 
     # normalize so norm is one, good for dot product later
     if normalize:
-        image_embeds = image_embeds / \
-            image_embeds.norm(p=2, dim=-1, keepdim=True)
+        image_embeds /= image_embeds.norm(p=2, dim=-1, keepdim=True)
 
     return image_embeds, prosessed_images
 

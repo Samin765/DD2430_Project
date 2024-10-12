@@ -24,23 +24,26 @@ class FinetuneCLIP():
     def train(self):
         """Training loop"""
         self.clip['m'].train()
-        for epoch in tqdm(range(self.conf['epochs'])):
-            running_loss, n_data = 0.0, 0
-            for batch_nr, (image_embeds, labels, images) in enumerate(self.dataloaders['train']):
-                self.optimizer.zero_grad()
-                _, loss = self.forward(image_embeds, labels)
-                loss.backward()
-                self.optimizer.step()
-                running_loss += loss.item()
-                n_data += len(labels)
-                # print(self.train_p['soft'].grad)
-            self.loss['train'].append(running_loss/n_data)
-            if self.earlystop():
-                if self.tt['soft']:
-                    self.load_p()  # get best found
-                    return self.loss, self.train_p
-
-                return self.loss
+        with tqdm(total=self.conf['epochs'], desc="Training", unit="epoch") as pbar:
+            for epoch in range(self.conf['epochs']):
+                running_loss, n_data, n_data = 0.0, 0, 0
+                for batch_nr, (image_embeds, labels, images) in enumerate(self.dataloaders['train']):
+                    self.optimizer.zero_grad()
+                    _, loss = self.forward(image_embeds, labels)
+                    loss.backward()
+                    self.optimizer.step()
+                    running_loss += loss.item()
+                    #n_data += len(labels)
+                    # print(self.train_p['soft'].grad)
+                self.loss['train'].append(running_loss/len(self.dataloaders['train']))
+                if self.earlystop():
+                    if self.tt['soft']:
+                        self.load_p()  # get best found
+                        return self.loss, self.train_p
+                    return self.loss
+                pbar.set_postfix({"Patience": f"{self.es['curr_pat']} / {self.es['pat']}"})
+                pbar.update(1)
+                
 
     def forward(self, image_embeds, labels):
         """Get predictions of the model, add more here for different tuning methods"""
@@ -63,7 +66,6 @@ class FinetuneCLIP():
                 self.clip['m'], self.clip['p'], text)
             logits_per_image, loss = model_functions.apply_clip(
                 text_embeds, image_embeds, self.clip['m'], train=train)
-
         return logits_per_image, loss
 
     def eval(self, show_image=False):
@@ -85,19 +87,18 @@ class FinetuneCLIP():
         all_predictions, all_labels = torch.cat(
             all_predictions).cpu(), torch.tensor(all_labels).cpu()
         acc = utils.accuracy(all_predictions, all_labels)
-        print('Accuracyasdasdas', acc)
+        print('Accuracy', acc)
         return all_predictions, all_labels, acc
 
     def earlystop(self):
         """Stop training when val loss start to increase"""
         with torch.no_grad():
-            running_loss, n_data = 0.0, 0  # last batch can be smaller
+            running_loss = 0.0  # last batch can be smaller
             # val loader
             for batch_nr, (image_embeds, labels, images) in enumerate(self.dataloaders['val']):
                 _, loss = self.forward(image_embeds, labels)
                 running_loss += loss.item()
-                n_data += len(labels)
-            self.loss['val'].append(running_loss/n_data)
+            self.loss['val'].append(running_loss/len(self.dataloaders['val']))
             if len(self.loss['val']) > 2:  # early stop
                 if self.es['curr_pat'] == 0:
                     # if val_loss increase
@@ -111,8 +112,8 @@ class FinetuneCLIP():
                     # if val_loss continute to increase
                     if running_loss > self.es['min_loss']:
                         self.es['curr_pat'] += 1
-                        curr, pat = self.es['curr_pat'], self.es['pat']
-                        print(f'Patience is {curr} / {pat}')
+                        #curr, pat = self.es['curr_pat'], self.es['pat']
+                        #print(f'Patience is {curr} / {pat}')
                         if self.es['curr_pat'] >= self.es['pat']:
                             return 'STOP'
                     else:  # reset
@@ -134,7 +135,7 @@ class FinetuneCLIP():
         plt.show()
 
     def load_p(self):
-        """Load trained parameters"""
+        """Load trained parameters, add more here"""
         self.train_p['soft'] = torch.load(
             'soft_prompts.pth', weights_only=True)
 
@@ -151,11 +152,12 @@ class FinetuneCLIP():
         if self.tt['soft']:
             self.train_p['soft'] = nn.Parameter(torch.zeros(params['num_soft'],
                                                 self.clip['m'].text_projection.in_features), requires_grad=True)
-            tunable_params += list(self.train_p['soft'])
+            tunable_params.append(self.train_p['soft'])
+            assert self.train_p['soft'].is_leaf == tunable_params[0].is_leaf
 
         if self.tt['image_fc']:
             self.image_fc = nn.Linear(512, 512).to(self.device)
-            tunable_params += list(self.image_fc)
+            tunable_params += list(self.image_fc.parameters())
 
         if self.tt['LoRA']:
             self.train_p['LoRA'] = params['LoRA']
