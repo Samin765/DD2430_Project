@@ -5,3 +5,4 @@ dataset/
 __pycache__/*
 * copy.ipynb
 pth/*
+src/.ipynb_checkpoints/setup-checkpoint.py

@@ -110,7 +110,7 @@ class UniformHMDataset(Dataset):
         return self.emb[idx], self.labels[idx], self.image[idx]
 
     
-def create_dataset(n_samples, main_class, subclasses, clip, path, device, allow_duplicates=False, exclude=True):
+def create_dataset(n_samples, main_class, subclasses, clip, path, device, allow_duplicates=False, exclude=True, show=True):
     """Create balanced dataset, if exclude it includes only the given subclasses, else excludes"""
     dataset = HMDataset(
         articles_csv = path['hm'] + 'articles.csv',
@@ -134,7 +134,8 @@ def create_dataset(n_samples, main_class, subclasses, clip, path, device, allow_
         'class_text': labels,
         'images': images}
     os.makedirs(path['save'], exist_ok=True)
-    print(Counter(labels))
+    if show:
+        print(Counter(labels))
     torch.save(data_to_save, f"{path['save']}HM_data_{n_samples}_{main_class}_{len(subclasses)}.pth")
     return dataset # to get all classes
         
@@ -144,16 +145,16 @@ def load_dataset(n_samples, main_class, len_subclasses, path):
                             weights_only=True)
     return loaded_data
 
-def generate_train_test_val(labels, image_emb, images, batch_size, n_samples, set_sizes):
+def generate_train_test_val(labels, image_emb, images, batch_size, n_samples, set_sizes, show = True):
     """Generate train_test_val sets that are balanced""" 
-    dataset, dataset_train, dataset_test, dataset_val = split(labels, image_emb, images, n_samples, set_sizes)
+    dataset, dataset_train, dataset_test, dataset_val = split(labels, image_emb, images, n_samples, set_sizes, show = show)
     dataloader_train = DataLoader(dataset_train, batch_size=batch_size, shuffle=True)
     dataloader_val = DataLoader(dataset_val, batch_size=batch_size, shuffle=False)
     dataloader_test = DataLoader(dataset_test, batch_size=batch_size, shuffle=False)
     return {'train':dataloader_train, 'val':dataloader_val, 'test':dataloader_test}
 
 
-def split(labels0, image_emb0, images0, n_samples, set_sizes):
+def split(labels0, image_emb0, images0, n_samples, set_sizes, show = True):
     """Given trainingdata splits it into train/val/test"""
     combined = sorted(zip(labels0, image_emb0, images0), key=lambda x: x[0])
     labels, image_emb, images = zip(*combined)
@@ -202,11 +203,11 @@ def split(labels0, image_emb0, images0, n_samples, set_sizes):
     dataset_val = UniformHMDataset(val_image_emb, val_labels, val_images)
 
     # checking
-    print(len(labels), len(dataset_train.labels), len(
-        dataset_test.labels), len(dataset_val.labels))
-    # print(dataset_train.labels)
-
-    # check class-balance of splits
-    for labels_ in [labels, dataset_train.labels, dataset_val.labels, dataset_test.labels]:
-        print(Counter(labels_))
+    if show:
+        print(len(labels), len(dataset_train.labels), len(
+            dataset_test.labels), len(dataset_val.labels))
+        # check class-balance of splits
+        for labels_ in [labels, dataset_train.labels, dataset_val.labels, dataset_test.labels]:
+            print(Counter(labels_))
+            
     return dataset, dataset_train, dataset_test, dataset_val

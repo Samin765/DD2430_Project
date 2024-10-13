@@ -43,6 +43,7 @@ class FinetuneCLIP():
                     return self.loss
                 pbar.set_postfix({"Patience": f"{self.es['curr_pat']} / {self.es['pat']}"})
                 pbar.update(1)
+            return self.loss
                 
 
     def forward(self, image_embeds, labels):
