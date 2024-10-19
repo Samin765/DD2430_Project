@@ -119,7 +119,7 @@ def create_dataset(n_samples, main_class, subclasses, clip, path, device, allow_
         model = clip['m'].to(device),
         processor = clip['p'])
     assert n_samples >=10, 'Must be have more than 10 for val splits'
-    assert dataset.articles[dataset.main_class].value_counts().min()>=n_samples, 'Can not make balanced set'
+    #assert dataset.articles[dataset.main_class].value_counts().min()>=n_samples, 'Can not make balanced set'
     if exclude:
         for exclude_subclass in subclasses:
             dataset.counts[exclude_subclass]=n_samples

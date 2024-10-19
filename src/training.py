@@ -5,15 +5,16 @@ from tqdm import tqdm
 import utils
 import model_functions
 import torch.nn as nn
+import copy
 
 
 class FinetuneCLIP():
     def __init__(self, dataloaders, clip, epochs=200):
         self.dataloaders = dataloaders
-        self.loss = {'train': [], 'val': []}
-        self.es = {'pat': 10, 'curr_pat': 0, 'min_loss': np.inf}  # early stop
-        self.conf = {'epochs': epochs}
         self.clip = clip  # model and processor
+        self.loss = {'train': [], 'val': []}
+        self.es = {'pat': 10, 'curr_pat': 0, 'min_loss': np.inf, 'best_model':clip['m']}  # early stop
+        self.conf = {'epochs': epochs}
         self.train_p = {}  # Store trainable parameters here
         self.tt = {'soft': 1, 'LoRA': 0, 'image_fc': 0}  # tuning method to use
         self.optimizer = None  # config in initialize
@@ -37,13 +38,11 @@ class FinetuneCLIP():
                     # print(self.train_p['soft'].grad)
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
                 if self.earlystop():
-                    if self.tt['soft']:
-                        self.load_p()  # get best found
-                        return self.loss, self.train_p
-                    return self.loss
+                    self.load_p()  # get parameters best found
+                    return self.loss, self.train_p
                 pbar.set_postfix({"Patience": f"{self.es['curr_pat']} / {self.es['pat']}"})
                 pbar.update(1)
-            return self.loss
+            return self.loss, self.train_p
                 
 
     def forward(self, image_embeds, labels):
@@ -102,12 +101,14 @@ class FinetuneCLIP():
             self.loss['val'].append(running_loss/len(self.dataloaders['val']))
             if len(self.loss['val']) > 2:  # early stop
                 if self.es['curr_pat'] == 0:
-                    # if val_loss increase
+                    # if val_loss increase first time
                     if running_loss > self.loss['val'][-2]:
                         self.es['min_loss'] = running_loss
+                        self.es['best_model'] = copy.deepcopy(self.clip['m'])
                         if self.tt['soft']:
                             torch.save(
                                 self.train_p['soft'], 'soft_prompts.pth')
+                        
                         self.es['curr_pat'] += 1
                 else:
                     # if val_loss continute to increase
@@ -137,8 +138,11 @@ class FinetuneCLIP():
 
     def load_p(self):
         """Load trained parameters, add more here"""
-        self.train_p['soft'] = torch.load(
-            'soft_prompts.pth', weights_only=True)
+        self.clip['m'] = self.es['best_model'] # the parameters at minimum
+        if self.tt['soft']:
+            self.train_p['soft'] = torch.load(
+                'soft_prompts.pth', weights_only=True)
+        
 
     def initialize(self, params):
         """Initialize trainable parameters"""

@@ -6,3 +6,5 @@ __pycache__/*
 * copy.ipynb
 pth/*
 src/.ipynb_checkpoints/setup-checkpoint.py
+src/.ipynb_checkpoints/training-checkpoint.py
+src/.ipynb_checkpoints/Data_distrubution_histograms-checkpoint.ipynb
