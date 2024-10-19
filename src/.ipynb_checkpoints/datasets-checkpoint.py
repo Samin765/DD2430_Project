@@ -8,8 +8,7 @@ from PIL import Image, ImageOps
 import random
 from collections import Counter
 import os
-from torch.utils.data import DataLoader
-
+from torch.utils.data import DataLoader, TensorDataset, random_split
 
 
 
@@ -211,3 +210,113 @@ def split(labels0, image_emb0, images0, n_samples, set_sizes, show = True):
             print(Counter(labels_))
             
     return dataset, dataset_train, dataset_test, dataset_val
+
+
+###################UNBALANCED#####################
+
+class HMDatasetDuplicates(Dataset):
+    def __init__(self, embeddings, article_ids, df):
+        self.embeddings = embeddings # [105099, 512]
+        self.article_ids = article_ids # [105099]
+        self.df = df
+    
+    def __getitem__(self, idx):
+        return self.embeddings[idx], self.article_ids[idx]
+    
+    def __len__(self):
+        return len(self.article_ids)
+    
+    def article_id2suclass(self, article_id, class_label):
+        """For example (694805002, 'garment_group_name') -> 'Knitwear' """
+        return self.df [self.df['article_id']==article_id][class_label].item()
+    
+    def list_article_id2suclass(self, list_article_id, class_label):
+        """Same as article_id2suclass but for lists"""
+        out = ['']*len(list_article_id)
+        for i, ids in enumerate(list_article_id):
+            out[i]=self.article_id2suclass(ids, class_label)
+        return out
+    
+class HMDatasetUnique(HMDatasetDuplicates):
+    def __init__(self, embeddings, article_ids, df):
+        super().__init__(embeddings, article_ids, df)
+        self.unique_article_ids, self.unique_embeddings = self.get_non_duplicates(self.article_ids, self.embeddings)
+        
+    def __getitem__(self, idx):
+        return self.unique_embeddings[idx], self.unique_article_ids[idx]
+    
+    def __len__(self):
+        return len(self.unique_article_ids)
+    
+    def get_non_duplicates(self, article_ids, embeddings):
+        """article_ids that is not of the same product_code, aka only different colour"""
+        product_codes, unique_ids, unique_emb = set(), [], []
+        for i, article_id in enumerate(article_ids):
+            product_code = self.article_id2suclass(article_id, 'product_code')
+            if product_code not in product_codes: # only unique
+                unique_ids.append(article_id)
+                unique_emb.append(embeddings[i])
+                product_codes.add(product_code)            
+        return unique_ids, torch.stack(unique_emb)
+
+class HMDatasetTrain(HMDatasetUnique):
+    def __init__(self, embeddings, article_ids, df, train_dataset):
+        super().__init__(embeddings, article_ids, df)
+        self.article_ids_train_populated , self.embeddings_train_populated=self.get_duplicates(train_dataset)
+        
+    def __getitem__(self, idx):
+        return self.embeddings_train_populated[idx], self.article_ids_train_populated[idx]
+    
+    def __len__(self):
+        return len(self.article_ids_train_populated)
+    
+    def get_duplicates(self, train_dataset):
+        product_codes, ids_filled, emb_filled = set(), [], []
+        for idx in range(len(train_dataset)):# non duplicates
+            embedding, article_id = train_dataset[idx]
+            product_code = self.article_id2suclass(article_id, 'product_code')
+            product_codes.add(product_code)
+            
+        for i, article_id in enumerate(self.article_ids):
+            product_code = self.article_id2suclass(article_id, 'product_code')
+            if product_code in product_codes: # we want to fill now
+                ids_filled.append(article_id)
+                emb_filled.append(self.embeddings[i])   
+        return ids_filled, torch.stack(emb_filled)
+
+def split(dataset,set_sizes, show=False):
+    train_size = int(set_sizes["train"] * len(dataset))
+    val_size = int(set_sizes["val"] * len(dataset))
+    test_size = len(dataset) - train_size - val_size 
+    train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+    if show:
+        print(f"{len(dataset)} Train size: {len(train_dataset)}, Val size: {len(val_dataset)}, Test size: {len(test_dataset)}")
+    return train_dataset, val_dataset, test_dataset
+    
+def loaders(embs, labs, df, batch_size, set_sizes,, show=False):
+    """Generate train_test_val Loaders that are NOT balanced""" 
+    
+    hmd = HMDatasetDuplicates(embs, labs, df)
+    hmdu = HMDatasetUnique(embs, labs, df)
+    train_dataset_temp, val_dataset, test_dataset = split(hmdu,set_sizes, show)
+ 
+    #includes samples with same 'product_code' however they are not shared in train/val/test
+    hmdtrain = HMDatasetTrain(embs, labs, df, train_dataset_temp)
+    
+    dataloader_train = DataLoader(hmdtrain, batch_size=batch_size, shuffle=True)
+    dataloader_val = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    dataloader_test = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+    if show:
+        print(len(hmd))
+        #assertion
+        train, val, test =set(), set(), set()
+        for _,lab in hmdtrain:
+            train.add(hmdu.article_id2suclass(lab, 'product_code'))
+        for _,lab in val_dataset:
+            val.add(hmdu.article_id2suclass(lab, 'product_code'))
+        for _,lab in test_dataset:
+            test.add(hmdu.article_id2suclass(lab, 'product_code'))
+        print('This should be empty' ,train.intersection(val, test), val.intersection(test))    
+        print('The resulting sizes',len(hmdtrain),len(val_dataset),len(test_dataset))
+        
+    return {'train':dataloader_train, 'val':dataloader_val, 'test':dataloader_test}
