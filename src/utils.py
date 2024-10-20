@@ -60,3 +60,37 @@ def print_images(dataloader, processor, limit=10):
     for batch_nr, (image_embeds, labels, images) in enumerate(tqdm(dataloader)):
         if batch_nr < limit:
             return_normal(images, processor, 4, True)
+
+            
+            
+###TESTs
+def print_dataset(datasets, i):
+    for att in ['test', 'val', 'train']:# commandF article_id and see that it is correct in the csv file, yes
+        print(datasets[att].article_ids[i])
+        print(datasets[att].feature[i])
+        print(datasets[att].detail_desc[i])
+    
+def error_complete(dataset, show):
+    """Look if all have same datatype"""
+    no_detail_desc_ids = []
+    for i in range(len(dataset)):
+        if isinstance(dataset[i][0], torch.Tensor) and isinstance(dataset[i][1], np.int64) and isinstance(dataset[i][2], str) and isinstance(dataset[i][3], str):
+            pass
+        else:
+            no_detail_desc_ids.append(dataset[i][1])
+            if show:
+                for j in range(4):
+                    print(type(dataset[i][j]))   
+                print(dataset[i][3], dataset[i][1])
+    print(f"There are {len(no_detail_desc_ids)} empty values that were filled")
+
+def error_loader(dataloader):
+    dataloader_iter= iter(dataloader)
+    # Fetch the first batch
+    batch = next(dataloader_iter)
+    batch = next(dataloader_iter)
+    batch = next(dataloader_iter)
+    for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(dataloader)):
+        if batch_nr<4:
+            print(image_embeds, article_ids, feature, detail_desc)
+            

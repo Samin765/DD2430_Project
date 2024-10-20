@@ -8,7 +8,7 @@ from PIL import Image, ImageOps
 import random
 from collections import Counter
 import os
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, random_split
 import copy
 
 
@@ -106,7 +106,7 @@ class UniformHMDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        return self.emb[idx], self.labels[idx], self.image[idx]
+        return self.emb[idx], self.labels[idx], self.image[idx], 1 #fill
 
     
 def create_dataset(n_samples, main_class, subclasses, clip, path, device, allow_duplicates=False, exclude=True, show=True):
@@ -220,8 +220,10 @@ class HMDatasetDuplicates(Dataset):
         self.article_ids = article_ids # [105099]
         self.df = df
         
-        self.feature = copy.deepcopy(article_ids) #placeholder
-        self.detail_desc = copy.deepcopy(article_ids) #placeholder
+        self.feature = [""]*len(article_ids) #placeholder
+        self.detail_desc = [""]*len(article_ids) #placeholder
+        self.classes = []
+        self.class_to_id = {}
     
     def __getitem__(self, idx):
         return self.embeddings[idx], self.article_ids[idx], self.feature[idx], self.detail_desc[idx]
@@ -287,21 +289,32 @@ class HMDatasetTrain(HMDatasetUnique):
                 emb_filled.append(self.embeddings[i])   
         return ids_filled, torch.stack(emb_filled)
 
-def split(dataset,set_sizes, show=False):
+def split2(dataset,set_sizes, show=False):
     train_size = int(set_sizes["train"] * len(dataset))
     val_size = int(set_sizes["val"] * len(dataset))
     test_size = len(dataset) - train_size - val_size 
+   
+    indices = torch.randperm(len(dataset)).tolist()    
+    
     train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
+    val_dataset = HMDatasetUnique(dataset.unique_embeddings[val_dataset.indices], np.array(dataset.unique_article_ids)[val_dataset.indices], dataset.df)
+    
+    test_dataset = HMDatasetUnique(dataset.unique_embeddings[test_dataset.indices], np.array(dataset.unique_article_ids)[test_dataset.indices], dataset.df)
+    
+    
+    train_dataset = HMDatasetUnique(dataset.unique_embeddings[train_dataset.indices], np.array(dataset.unique_article_ids)[train_dataset.indices], dataset.df)
+    
+    #train_dataset, val_dataset, test_dataset = random_split(dataset, [train_size, val_size, test_size])
     if show:
         print(f"{len(dataset)} Train size: {len(train_dataset)}, Val size: {len(val_dataset)}, Test size: {len(test_dataset)}")
     return train_dataset, val_dataset, test_dataset
     
-def datasets(embs, labs, df, batch_size, set_sizes, show=False):
+def datasets(embs, labs, df, set_sizes, show=False):
     """Generate train_test_val datasets that are NOT balanced""" 
     
     hmd = HMDatasetDuplicates(embs, labs, df)
     hmdu = HMDatasetUnique(embs, labs, df)
-    train_dataset_temp, val_dataset, test_dataset = split(hmdu,set_sizes, show)
+    train_dataset_temp, val_dataset, test_dataset = split2(hmdu,set_sizes, show)
  
     #includes samples with same 'product_code' however they are not shared in train/val/test
     hmdtrain = HMDatasetTrain(embs, labs, df, train_dataset_temp)
@@ -321,8 +334,23 @@ def datasets(embs, labs, df, batch_size, set_sizes, show=False):
         
     return {'train':hmdtrain, 'val':val_dataset, 'test':test_dataset}
 
-def loaders(train, val, test):
-    dataloader_train = DataLoader(hmdtrain, batch_size=batch_size, shuffle=True)
-    dataloader_val = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    dataloader_test = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+def loaders(datasets, batch_size):
+    dataloader_train = DataLoader(datasets['train'], batch_size=batch_size, shuffle=True)
+    dataloader_val = DataLoader(datasets['val'], batch_size=batch_size, shuffle=False)
+    dataloader_test = DataLoader(datasets['test'], batch_size=batch_size, shuffle=False)
     return {'train':dataloader_train, 'val':dataloader_val, 'test':dataloader_test}
+
+
+def fill_target(class_label, datasets): #2min
+    """Fill the feature with class of choise"""
+    for att in ['test', 'val', 'train']:
+        ds = datasets[att]
+        ds.classes = list(set(df[class_label]))
+        ds.class_to_id = {name: i for i, name in enumerate(ds.classes)}
+        for idx in tqdm(range(len(ds))):
+            embedding, article_id, _,_ = ds[idx]
+            ds.feature[idx]= ds.article_id2suclass(article_id, class_label)
+            detail_desc = ds.article_id2suclass(article_id, 'detail_desc')
+            if isinstance(detail_desc, float): # 300 are empty
+                detail_desc = 'product' # just somehing
+            ds.detail_desc[idx]= detail_desc

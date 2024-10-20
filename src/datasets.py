@@ -8,7 +8,7 @@ from PIL import Image, ImageOps
 import random
 from collections import Counter
 import os
-from torch.utils.data import DataLoader, TensorDataset, random_split
+from torch.utils.data import DataLoader, random_split
 import copy
 
 
@@ -106,7 +106,7 @@ class UniformHMDataset(Dataset):
         return len(self.labels)
 
     def __getitem__(self, idx):
-        return self.emb[idx], self.labels[idx], self.image[idx], 1 
+        return self.emb[idx], self.labels[idx], self.image[idx], 1 #fill
 
     
 def create_dataset(n_samples, main_class, subclasses, clip, path, device, allow_duplicates=False, exclude=True, show=True):
@@ -309,7 +309,7 @@ def split2(dataset,set_sizes, show=False):
         print(f"{len(dataset)} Train size: {len(train_dataset)}, Val size: {len(val_dataset)}, Test size: {len(test_dataset)}")
     return train_dataset, val_dataset, test_dataset
     
-def datasets(embs, labs, df, batch_size, set_sizes, show=False):
+def datasets(embs, labs, df, set_sizes, show=False):
     """Generate train_test_val datasets that are NOT balanced""" 
     
     hmd = HMDatasetDuplicates(embs, labs, df)
@@ -339,3 +339,18 @@ def loaders(datasets, batch_size):
     dataloader_val = DataLoader(datasets['val'], batch_size=batch_size, shuffle=False)
     dataloader_test = DataLoader(datasets['test'], batch_size=batch_size, shuffle=False)
     return {'train':dataloader_train, 'val':dataloader_val, 'test':dataloader_test}
+
+
+def fill_target(class_label, datasets): #2min
+    """Fill the feature with class of choise"""
+    for att in ['test', 'val', 'train']:
+        ds = datasets[att]
+        ds.classes = list(set(df[class_label]))
+        ds.class_to_id = {name: i for i, name in enumerate(ds.classes)}
+        for idx in tqdm(range(len(ds))):
+            embedding, article_id, _,_ = ds[idx]
+            ds.feature[idx]= ds.article_id2suclass(article_id, class_label)
+            detail_desc = ds.article_id2suclass(article_id, 'detail_desc')
+            if isinstance(detail_desc, float): # 300 are empty
+                detail_desc = 'product' # just somehing
+            ds.detail_desc[idx]= detail_desc

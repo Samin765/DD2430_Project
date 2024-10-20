@@ -42,7 +42,9 @@ class FinetuneCLIP():
                         _, loss = self.forward(image_embeds, feature)# feature
                         loss.backward()
                         self.optimizer.step()
-                        running_loss += loss.item()
+                        running_loss += loss.detach().item()
+                        del image_embeds, article_ids, feature, detail_desc, loss
+                        torch.cuda.empty_cache()  
                     
                     
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
