@@ -9,7 +9,7 @@ import random
 from collections import Counter
 import os
 from torch.utils.data import DataLoader, TensorDataset, random_split
-
+import copy
 
 
 class HMDataset(Dataset):
@@ -219,9 +219,12 @@ class HMDatasetDuplicates(Dataset):
         self.embeddings = embeddings # [105099, 512]
         self.article_ids = article_ids # [105099]
         self.df = df
+        
+        self.feature = copy.deepcopy(article_ids) #placeholder
+        self.detail_desc = copy.deepcopy(article_ids) #placeholder
     
     def __getitem__(self, idx):
-        return self.embeddings[idx], self.article_ids[idx]
+        return self.embeddings[idx], self.article_ids[idx], self.feature[idx], self.detail_desc[idx]
     
     def __len__(self):
         return len(self.article_ids)
@@ -243,7 +246,7 @@ class HMDatasetUnique(HMDatasetDuplicates):
         self.unique_article_ids, self.unique_embeddings = self.get_non_duplicates(self.article_ids, self.embeddings)
         
     def __getitem__(self, idx):
-        return self.unique_embeddings[idx], self.unique_article_ids[idx]
+        return self.unique_embeddings[idx], self.unique_article_ids[idx], self.feature[idx], self.detail_desc[idx]
     
     def __len__(self):
         return len(self.unique_article_ids)
@@ -265,7 +268,7 @@ class HMDatasetTrain(HMDatasetUnique):
         self.article_ids_train_populated , self.embeddings_train_populated=self.get_duplicates(train_dataset)
         
     def __getitem__(self, idx):
-        return self.embeddings_train_populated[idx], self.article_ids_train_populated[idx]
+        return self.embeddings_train_populated[idx], self.article_ids_train_populated[idx], self.feature[idx], self.detail_desc[idx]
     
     def __len__(self):
         return len(self.article_ids_train_populated)
@@ -273,7 +276,7 @@ class HMDatasetTrain(HMDatasetUnique):
     def get_duplicates(self, train_dataset):
         product_codes, ids_filled, emb_filled = set(), [], []
         for idx in range(len(train_dataset)):# non duplicates
-            embedding, article_id = train_dataset[idx]
+            embedding, article_id,_,_ = train_dataset[idx]
             product_code = self.article_id2suclass(article_id, 'product_code')
             product_codes.add(product_code)
             
@@ -293,8 +296,8 @@ def split(dataset,set_sizes, show=False):
         print(f"{len(dataset)} Train size: {len(train_dataset)}, Val size: {len(val_dataset)}, Test size: {len(test_dataset)}")
     return train_dataset, val_dataset, test_dataset
     
-def loaders(embs, labs, df, batch_size, set_sizes,, show=False):
-    """Generate train_test_val Loaders that are NOT balanced""" 
+def datasets(embs, labs, df, batch_size, set_sizes, show=False):
+    """Generate train_test_val datasets that are NOT balanced""" 
     
     hmd = HMDatasetDuplicates(embs, labs, df)
     hmdu = HMDatasetUnique(embs, labs, df)
@@ -302,21 +305,24 @@ def loaders(embs, labs, df, batch_size, set_sizes,, show=False):
  
     #includes samples with same 'product_code' however they are not shared in train/val/test
     hmdtrain = HMDatasetTrain(embs, labs, df, train_dataset_temp)
-    
-    dataloader_train = DataLoader(hmdtrain, batch_size=batch_size, shuffle=True)
-    dataloader_val = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-    dataloader_test = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+ 
     if show:
         print(len(hmd))
         #assertion
         train, val, test =set(), set(), set()
-        for _,lab in hmdtrain:
+        for _,lab,_,_ in hmdtrain:
             train.add(hmdu.article_id2suclass(lab, 'product_code'))
-        for _,lab in val_dataset:
+        for _,lab,_,_ in val_dataset:
             val.add(hmdu.article_id2suclass(lab, 'product_code'))
-        for _,lab in test_dataset:
+        for _,lab,_,_ in test_dataset:
             test.add(hmdu.article_id2suclass(lab, 'product_code'))
         print('This should be empty' ,train.intersection(val, test), val.intersection(test))    
         print('The resulting sizes',len(hmdtrain),len(val_dataset),len(test_dataset))
         
+    return {'train':hmdtrain, 'val':val_dataset, 'test':test_dataset}
+
+def loaders(train, val, test):
+    dataloader_train = DataLoader(hmdtrain, batch_size=batch_size, shuffle=True)
+    dataloader_val = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
+    dataloader_test = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     return {'train':dataloader_train, 'val':dataloader_val, 'test':dataloader_test}

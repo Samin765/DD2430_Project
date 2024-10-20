@@ -14,7 +14,7 @@ class FinetuneCLIP():
         self.clip = clip  # model and processor
         self.loss = {'train': [], 'val': []}
         self.es = {'pat': 10, 'curr_pat': 0, 'min_loss': np.inf, 'best_model':clip['m']}  # early stop
-        self.conf = {'epochs': epochs}
+        self.conf = {'epochs': epochs, 'balanced':True}
         self.train_p = {}  # Store trainable parameters here
         self.tt = {'soft': 1, 'LoRA': 0, 'image_fc': 0}  # tuning method to use
         self.optimizer = None  # config in initialize
@@ -28,14 +28,23 @@ class FinetuneCLIP():
         with tqdm(total=self.conf['epochs'], desc="Training", unit="epoch") as pbar:
             for epoch in range(self.conf['epochs']):
                 running_loss, n_data, n_data = 0.0, 0, 0
-                for batch_nr, (image_embeds, labels, images) in enumerate(self.dataloaders['train']):
-                    self.optimizer.zero_grad()
-                    _, loss = self.forward(image_embeds, labels)
-                    loss.backward()
-                    self.optimizer.step()
-                    running_loss += loss.item()
-                    #n_data += len(labels)
-                    # print(self.train_p['soft'].grad)
+                if self.conf['balanced']:
+                    for batch_nr, (image_embeds, labels, _, _) in enumerate(self.dataloaders['train']):
+                        self.optimizer.zero_grad()
+                        _, loss = self.forward(image_embeds, labels)
+                        loss.backward()
+                        self.optimizer.step()
+                        running_loss += loss.item()
+                else:
+                    for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
+                        
+                        self.optimizer.zero_grad()
+                        _, loss = self.forward(image_embeds, feature)# feature
+                        loss.backward()
+                        self.optimizer.step()
+                        running_loss += loss.item()
+                    
+                    
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
                 if self.earlystop():
                     self.load_p()  # get parameters best found
@@ -72,18 +81,28 @@ class FinetuneCLIP():
         """Evaluate model on test set"""
         all_predictions, all_labels = [], []
         with torch.no_grad():
-            for batch_nr, (image_embeds, labels, images) in enumerate(tqdm(self.dataloaders['test'])):
-                logits_per_image, _ = self.forward(
-                    image_embeds, self.dataloaders['test'].dataset.classes)
-                # probs = logits_per_image.softmax(dim=-1).cpu().numpy()
-                predicted_class = logits_per_image.argmax(dim=-1)
-                all_predictions.append(predicted_class)
-                for lab in labels:
-                    all_labels.append(
-                        self.dataloaders['test'].dataset.class_to_id[lab])
-                if show_image and batch_nr % 40 == 0:
-                    images = utils.return_normal(
-                        images, self.clip['p'], 4, True)
+            if self.conf['balanced']:
+                for batch_nr, (image_embeds, labels, _, _) in enumerate(tqdm(self.dataloaders['test'])):
+                    logits_per_image, _ = self.forward(
+                        image_embeds, self.dataloaders['test'].dataset.classes)
+                    # probs = logits_per_image.softmax(dim=-1).cpu().numpy()
+                    predicted_class = logits_per_image.argmax(dim=-1)
+                    all_predictions.append(predicted_class)
+                    for lab in labels:
+                        all_labels.append(
+                            self.dataloaders['test'].dataset.class_to_id[lab])
+            else:
+                for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
+                    logits_per_image, _ = self.forward(
+                        image_embeds, self.dataloaders['test'].dataset.classes)
+                    # probs = logits_per_image.softmax(dim=-1).cpu().numpy()
+                    predicted_class = logits_per_image.argmax(dim=-1)
+                    all_predictions.append(predicted_class)
+                    for lab in feature:
+     
+                        all_labels.append(
+                            self.dataloaders['test'].dataset.class_to_id[lab])
+                   
         all_predictions, all_labels = torch.cat(
             all_predictions).cpu(), torch.tensor(all_labels).cpu()
         acc = utils.accuracy(all_predictions, all_labels)
@@ -95,9 +114,15 @@ class FinetuneCLIP():
         with torch.no_grad():
             running_loss = 0.0  # last batch can be smaller
             # val loader
-            for batch_nr, (image_embeds, labels, images) in enumerate(self.dataloaders['val']):
-                _, loss = self.forward(image_embeds, labels)
-                running_loss += loss.item()
+            if self.conf['balanced']:
+                for batch_nr, (image_embeds, labels, _,_) in enumerate(self.dataloaders['val']):
+                    _, loss = self.forward(image_embeds, labels)
+                    running_loss += loss.item()
+            else:
+                for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
+                    _, loss = self.forward(image_embeds, feature)
+                    running_loss += loss.item()
+
             self.loss['val'].append(running_loss/len(self.dataloaders['val']))
             if len(self.loss['val']) > 2:  # early stop
                 if self.es['curr_pat'] == 0:
