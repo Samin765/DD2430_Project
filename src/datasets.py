@@ -10,6 +10,7 @@ from collections import Counter
 import os
 from torch.utils.data import DataLoader, random_split
 import copy
+from tqdm import tqdm
 
 
 class HMDataset(Dataset):
@@ -345,7 +346,7 @@ def fill_target(class_label, datasets): #2min
     """Fill the feature with class of choise"""
     for att in ['test', 'val', 'train']:
         ds = datasets[att]
-        ds.classes = list(set(df[class_label]))
+        ds.classes = list(set(ds.df[class_label]))
         ds.class_to_id = {name: i for i, name in enumerate(ds.classes)}
         for idx in tqdm(range(len(ds))):
             embedding, article_id, _,_ = ds[idx]
@@ -354,3 +355,38 @@ def fill_target(class_label, datasets): #2min
             if isinstance(detail_desc, float): # 300 are empty
                 detail_desc = 'product' # just somehing
             ds.detail_desc[idx]= detail_desc
+            
+def fill_target_threshold(class_label, datasets, threshold=5000, exclude_classes=None):
+ 
+    if exclude_classes is None:
+        exclude_classes = []
+        
+    for att in ['test', 'val', 'train']:
+        ds = datasets[att]
+        ds.classes = list(set(ds.df[class_label]))
+        ds.class_to_id = {name: i for i, name in enumerate(ds.classes)}
+        
+        class_count = {class_name: 0 for class_name in ds.classes if class_name not in exclude_classes}
+        
+        for idx in tqdm(range(len(ds))):
+            embedding, article_id, _, _ = ds[idx]
+            target_class = ds.article_id2suclass(article_id, class_label)
+            
+            if target_class in exclude_classes:
+                continue
+            
+            if class_count.get(target_class, 0) < threshold:
+                ds.feature[idx] = target_class
+                detail_desc = ds.article_id2suclass(article_id, 'detail_desc')
+                
+                if isinstance(detail_desc, float):  # If description is missing
+                    detail_desc = 'product'  # Default placeholder
+                
+                ds.detail_desc[idx] = detail_desc
+                
+                class_count[target_class] += 1
+                
+                if class_count[target_class] >= threshold:
+                    continue  # Skip remaining samples of this class
+
+        print(f"Final class count for {att}: {class_count}")
