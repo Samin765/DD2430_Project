@@ -6,6 +6,8 @@ import utils
 import model_functions
 import torch.nn as nn
 import copy
+from sklearn.utils.class_weight import compute_class_weight
+from sklearn.preprocessing import LabelEncoder
 
 
 class FinetuneCLIP():
@@ -31,7 +33,8 @@ class FinetuneCLIP():
                 if self.conf['balanced']:
                     for batch_nr, (image_embeds, labels, _, _) in enumerate(self.dataloaders['train']):
                         self.optimizer.zero_grad()
-                        _, loss = self.forward(image_embeds, labels)
+                        batch_class_weights = self.get_class_weights(labels)
+                        _, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights = batch_class_weights)
                         loss.backward()
                         self.optimizer.step()
                         running_loss += loss.item()
@@ -39,7 +42,11 @@ class FinetuneCLIP():
                     for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
                         
                         self.optimizer.zero_grad()
-                        _, loss = self.forward(image_embeds, feature)# feature
+                        
+                   
+                        batch_class_weights = self.get_class_weights(feature)
+                        #print(class_weights)
+                        _, loss = self.forward(image_embeds, feature, self.conf['balanced'], class_weights = batch_class_weights)
                         loss.backward()
                         self.optimizer.step()
                         running_loss += loss.detach().item()
@@ -56,7 +63,7 @@ class FinetuneCLIP():
             return self.loss, self.train_p
                 
 
-    def forward(self, image_embeds, labels):
+    def forward(self, image_embeds, labels, balanced, class_weights = None):
         """Get predictions of the model, add more here for different tuning methods"""
         train = True if image_embeds.shape[0] == len(labels) else False
         text = [self.train_p['add']+i for i in labels]
@@ -71,12 +78,12 @@ class FinetuneCLIP():
             text_embeds = model_functions.get_text_emb_soft(
                 self.clip['m'], self.clip['p'], text, self.train_p['soft'])
             logits_per_image, loss = model_functions.apply_clip(
-                text_embeds, image_embeds, self.clip['m'], train=train)
+                text_embeds, image_embeds, self.clip['m'],balanced, train=train, labels = labels, class_weights = class_weights)
         else:
             text_embeds = model_functions.get_text_emb(
                 self.clip['m'], self.clip['p'], text)
             logits_per_image, loss = model_functions.apply_clip(
-                text_embeds, image_embeds, self.clip['m'], train=train)
+                text_embeds, image_embeds, self.clip['m'], balanced = balanced, train=train, labels = labels, class_weights = class_weights)
         return logits_per_image, loss
 
     def eval(self, show_image=False):
@@ -85,8 +92,11 @@ class FinetuneCLIP():
         with torch.no_grad():
             if self.conf['balanced']:
                 for batch_nr, (image_embeds, labels, _, _) in enumerate(tqdm(self.dataloaders['test'])):
-                    logits_per_image, _ = self.forward(
-                        image_embeds, self.dataloaders['test'].dataset.classes)
+                    #logits_per_image, _ = self.forward(
+                    #    image_embeds, self.dataloaders['test'].dataset.classes)
+                    batch_class_weights = self.get_class_weights(labels)
+                    logits_per_image, _ = self.forward(image_embeds, self.dataloaders['test'].dataset.classes, self.conf['balanced'], class_weights = batch_class_weights)
+
                     # probs = logits_per_image.softmax(dim=-1).cpu().numpy()
                     predicted_class = logits_per_image.argmax(dim=-1)
                     all_predictions.append(predicted_class)
@@ -95,8 +105,11 @@ class FinetuneCLIP():
                             self.dataloaders['test'].dataset.class_to_id[lab])
             else:
                 for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
-                    logits_per_image, _ = self.forward(
-                        image_embeds, self.dataloaders['test'].dataset.classes)
+                    #logits_per_image, _ = self.forward(
+                    #    image_embeds, self.dataloaders['test'].dataset.classes)
+                    batch_class_weights = self.get_class_weights(feature)
+                    logits_per_image, _ = self.forward(image_embeds, self.dataloaders['test'].dataset.classes, self.conf['balanced'], class_weights = batch_class_weights)
+
                     # probs = logits_per_image.softmax(dim=-1).cpu().numpy()
                     predicted_class = logits_per_image.argmax(dim=-1)
                     all_predictions.append(predicted_class)
@@ -118,11 +131,16 @@ class FinetuneCLIP():
             # val loader
             if self.conf['balanced']:
                 for batch_nr, (image_embeds, labels, _,_) in enumerate(self.dataloaders['val']):
-                    _, loss = self.forward(image_embeds, labels)
+                    #_, loss = self.forward(image_embeds, labels)
+                    batch_class_weights = self.get_class_weights(labels)
+                    _, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights = batch_class_weights)
+
                     running_loss += loss.item()
             else:
                 for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
-                    _, loss = self.forward(image_embeds, feature)
+                    #_, loss = self.forward(image_embeds, feature)
+                    batch_class_weights = self.get_class_weights(feature)
+                    _, loss = self.forward(image_embeds, feature, self.conf['balanced'], class_weights = batch_class_weights)
                     running_loss += loss.item()
 
             self.loss['val'].append(running_loss/len(self.dataloaders['val']))
@@ -209,3 +227,13 @@ class FinetuneCLIP():
         num_params = sum(p.numel()
                          for p in self.optimizer.param_groups[0]['params'])
         print(f'Total number of parameters in the optimizer: {num_params}')
+
+
+    def get_class_weights(self,labels):
+        encoder = LabelEncoder()
+        encoded_labels = encoder.fit_transform(labels)
+        encoded_labels_tensor = torch.tensor(encoded_labels)
+        classes = torch.unique(encoded_labels_tensor)
+        class_weights = compute_class_weight(class_weight = 'balanced' , classes = classes.cpu().numpy(), y = encoded_labels)
+        class_weights = torch.tensor(class_weights, dtype = torch.float32, device= encoded_labels_tensor.device)
+        return class_weights
