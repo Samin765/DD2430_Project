@@ -173,6 +173,19 @@ class FinetuneCLIP():
                  self.loss['train'], label='Training Loss')
         plt.plot(list(range(1, len(self.loss['val'])+1)),
                  self.loss['val'], label='Validation Loss')
+        
+        # Adding labels and title
+        plt.title('Loss Over Datapoints')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        
+    def plot_loss_key(self, key):
+        plt.figure(figsize=(10, 6))
+        plt.plot(list(range(1, len(self.loss[key])+1)),
+                 self.loss[key], label=f'{key} Loss')
         # Adding labels and title
         plt.title('Loss Over Datapoints')
         plt.xlabel('Epochs')

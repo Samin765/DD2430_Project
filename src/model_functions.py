@@ -145,17 +145,26 @@ def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights
             #print("balanced")
         else:
             #print("unbalanced")
-            loss = clip_loss_default(device, logits_per_image.t())
+            #loss = clip_loss_default(device, logits_per_image.t())
+            loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights)
     
 
     return logits_per_image, loss
 
 def weighted_clip_loss(logits, labels, device, class_weights = None):
-    tensor_labels = torch.tensor(labels)
-
+    #tensor_labels = torch.tensor(labels)
+    
+    encoder = LabelEncoder()
+    encoded_labels = encoder.fit_transform(labels)
+    encoded_labels_tensor = torch.tensor(encoded_labels)
+    
     if class_weights is not None:
-        loss = clip_loss_default(device, logits.t())
-        weighted_loss = loss * class_weights[tensor_labels]
+        
+        #loss = clip_loss_default(device, logits.t())
+        loss = clip_loss(logits.t())
+        class_weights = class_weights.to(device)
+        weighted_loss = loss * class_weights[encoded_labels_tensor.to(device)]
+        #print(weighted_loss)
         return weighted_loss.mean()
     else:
         return clip_loss(logits_per_image.t())

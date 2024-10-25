@@ -1,7 +1,10 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask, _create_4d_causal_attention_mask
 from transformers.models.clip.modeling_clip import clip_loss
+from sklearn.preprocessing import LabelEncoder
+
 
 ######################################################################################
 
@@ -91,8 +94,7 @@ def get_image_emb(model, processor, images, normalize=True):
 
     # normalize so norm is one, good for dot product later
     if normalize:
-        image_embeds = image_embeds / \
-            image_embeds.norm(p=2, dim=-1, keepdim=True)
+        image_embeds /= image_embeds.norm(p=2, dim=-1, keepdim=True)
 
     return image_embeds, prosessed_images
 
@@ -117,8 +119,14 @@ def get_text_emb(model, processor, text, normalize=True):
     return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True) if normalize else text_embeds
 
 
-def apply_clip(text_embeds, image_embeds, model, train=False, normalize_inputs=False):
+def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights, train=False, normalize_inputs=False):
     """Forward pass of clip"""
+    #print(class_weights)
+
+    encoder = LabelEncoder()
+    encoded_labels = encoder.fit_transform(labels)
+    encoded_labels_tensor = torch.tensor(encoded_labels)
+    
     if normalize_inputs:
         text_embeds /= text_embeds.norm(p=2, dim=-1, keepdim=True)
         image_embeds /= image_embeds.norm(p=2, dim=-1, keepdim=True)
@@ -131,8 +139,55 @@ def apply_clip(text_embeds, image_embeds, model, train=False, normalize_inputs=F
         image_embeds, text_embeds.t()) * logit_scale
     loss = 0
     if train:  # must have same ammount of text as images for training
-        loss = clip_loss(logits_per_image.t())
+        #loss = clip_loss(logits_per_image.t())
+        if balanced:
+            loss = clip_loss(logits_per_image.t())
+            #print("balanced")
+        else:
+            #print("unbalanced")
+            #loss = clip_loss_default(device, logits_per_image.t())
+            loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights)
+    
+
     return logits_per_image, loss
+
+def weighted_clip_loss(logits, labels, device, class_weights = None):
+    #tensor_labels = torch.tensor(labels)
+    
+    encoder = LabelEncoder()
+    encoded_labels = encoder.fit_transform(labels)
+    encoded_labels_tensor = torch.tensor(encoded_labels)
+    
+    if class_weights is not None:
+        
+        #loss = clip_loss_default(device, logits.t())
+        loss = clip_loss(logits.t())
+        class_weights = class_weights.to(device)
+        weighted_loss = loss * class_weights[encoded_labels_tensor.to(device)]
+        #print(weighted_loss)
+        return weighted_loss.mean()
+    else:
+        return clip_loss(logits_per_image.t())
+    
+def weighted_clip_loss_seperated(device, similarity: torch.Tensor, labels: torch.Tensor, class_weights=None):
+    if class_weights is not None:
+        caption_loss = contrastive_loss(device, similarity)
+        image_loss = contrastive_loss(device, similarity.t())
+        
+        weighted_caption_loss = caption_loss * class_weights[labels]
+        weighted_image_loss = image_loss * class_weights[labels]
+        
+        return (weighted_caption_loss.mean() + weighted_image_loss.mean()) / 2.0
+    else:
+        return clip_loss(logits_per_image.t())  
+    
+def clip_loss_default(device, similarity: torch.Tensor) -> torch.Tensor:
+    caption_loss = contrastive_loss(device, similarity)
+    image_loss = contrastive_loss(device,similarity.t())
+    return (caption_loss + image_loss) / 2.0
+                                
+def contrastive_loss(device , logits: torch.Tensor) -> torch.Tensor:
+    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
 
 
 def get_text_emb_soft(model, processor, text, soft_prompt_hidden):
