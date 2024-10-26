@@ -384,13 +384,13 @@ def fill_target(class_label, datasets): #2min
             ds.detail_desc[idx]= detail_desc
 
 def get_filtered_ids(class_label, datasets, threshold, exclude_classes):
-    keep_indexes = {
+    keep_indices = {
         'test': [],
         'val': [],
         'train': []
     }    
 
-    for att in keep_indexes.keys():
+    for att in keep_indices.keys():
         ds = datasets[att]
         
         class_count = {class_name: 0 for class_name in ds.classes if class_name not in exclude_classes}
@@ -408,19 +408,19 @@ def get_filtered_ids(class_label, datasets, threshold, exclude_classes):
             if class_count[target_class] >= threshold:
                 continue  # Skip remaining samples of this class
         
-            keep_indexes[att].append(idx)
+            keep_indices[att].append(idx)
             class_count[target_class] += 1
                 
         print(f"Final class count for {att}: {class_count}")
     
-    return keep_indexes
+    return keep_indices
 
 def create_filtered_datasets(class_label, datasets, threshold=5000, exclude_classes=[]):
-    keep_indexes = get_filtered_ids(class_label, datasets, threshold, exclude_classes)
+    keep_indices = get_filtered_ids(class_label, datasets, threshold, exclude_classes)
     filtered_datasets = {}
 
-    filtered_datasets['train'] = HMDatasetTrain.new_filtered_dataset(datasets['train'], keep_indexes['train'])
-    filtered_datasets['test'] = HMDatasetUnique.new_filtered_dataset(datasets['test'], keep_indexes['test'])
-    filtered_datasets['val'] = HMDatasetUnique.new_filtered_dataset(datasets['val'], keep_indexes['val'])
+    filtered_datasets['train'] = HMDatasetTrain.new_filtered_dataset(datasets['train'], keep_indices['train'])
+    filtered_datasets['test'] = HMDatasetUnique.new_filtered_dataset(datasets['test'], keep_indices['test'])
+    filtered_datasets['val'] = HMDatasetUnique.new_filtered_dataset(datasets['val'], keep_indices['val'])
 
     return filtered_datasets
