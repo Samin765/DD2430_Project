@@ -1,7 +1,7 @@
 import torch
 import pandas as pd
 import numpy as np
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, Subset
 from torchvision import transforms
 from model_functions import get_image_emb
 from PIL import Image, ImageOps
@@ -11,7 +11,7 @@ import os
 from torch.utils.data import DataLoader, random_split
 import copy
 from tqdm import tqdm
-
+from typing import List, Tuple
 
 class HMDataset(Dataset):
     def __init__(self, articles_csv, image_dir, main_class, processor, model, transform=None):
@@ -222,7 +222,8 @@ class HMDatasetDuplicates(Dataset):
         self.df = df
         
         self.feature = [""]*len(article_ids) #placeholder
-        self.detail_desc = [""]*len(article_ids) #placeholder
+        self.feature = np.full(len(article_ids), "", dtype=str)
+        self.detail_desc = np.full(len(article_ids), "", dtype=str) #placeholder
         self.classes = []
         self.class_to_id = {}
     
@@ -244,17 +245,30 @@ class HMDatasetDuplicates(Dataset):
         return out
     
 class HMDatasetUnique(HMDatasetDuplicates):
-    def __init__(self, embeddings, article_ids, df):
+    def __init__(self, embeddings, article_ids, df, get_non_duplicates=True):
         super().__init__(embeddings, article_ids, df)
-        self.unique_article_ids, self.unique_embeddings = self.get_non_duplicates(self.article_ids, self.embeddings)
+        if get_non_duplicates:
+            self.unique_article_ids, self.unique_embeddings = self.get_non_duplicates(self.article_ids, self.embeddings)
         
     def __getitem__(self, idx):
         return self.unique_embeddings[idx], self.unique_article_ids[idx], self.feature[idx], self.detail_desc[idx]
     
     def __len__(self):
         return len(self.unique_article_ids)
+
+    @classmethod
+    def new_filtered_dataset(cls, dataset, indices) -> 'HMDatasetUnique':
+        """ Create a new dataset with only the indices in the list """
+        assert dataset.__class__ == cls, "dataset function must be the same class"
+        ds = cls(dataset.embeddings, dataset.article_ids, dataset.df, get_non_duplicates=False)
+        ds.feature = dataset.feature[indices]
+        ds.detail_desc = dataset.detail_desc[indices]
+
+        ds.unique_embeddings = dataset.unique_embeddings[indices]
+        ds.unique_article_ids = dataset.unique_article_ids[indices]
+        return ds
     
-    def get_non_duplicates(self, article_ids, embeddings):
+    def get_non_duplicates(self, article_ids, embeddings) -> Tuple[np.ndarray, torch.Tensor]:
         """article_ids that is not of the same product_code, aka only different colour"""
         product_codes, unique_ids, unique_emb = set(), [], []
         for i, article_id in enumerate(article_ids):
@@ -263,18 +277,31 @@ class HMDatasetUnique(HMDatasetDuplicates):
                 unique_ids.append(article_id)
                 unique_emb.append(embeddings[i])
                 product_codes.add(product_code)            
-        return unique_ids, torch.stack(unique_emb)
+        return np.array(unique_ids), torch.stack(unique_emb)
 
 class HMDatasetTrain(HMDatasetUnique):
-    def __init__(self, embeddings, article_ids, df, train_dataset):
-        super().__init__(embeddings, article_ids, df)
-        self.article_ids_train_populated , self.embeddings_train_populated=self.get_duplicates(train_dataset)
-        
+    def __init__(self, embeddings, article_ids, df, train_dataset=None, get_non_duplicates=True):
+        super().__init__(embeddings, article_ids, df, get_non_duplicates)
+        if get_non_duplicates:
+            self.article_ids_train_populated, self.embeddings_train_populated = self.get_duplicates(train_dataset)
+    
     def __getitem__(self, idx):
         return self.embeddings_train_populated[idx], self.article_ids_train_populated[idx], self.feature[idx], self.detail_desc[idx]
     
     def __len__(self):
         return len(self.article_ids_train_populated)
+
+    @classmethod
+    def new_filtered_dataset(cls, dataset, indices):
+        """ Create a new dataset with only the indices in the list """
+        assert dataset.__class__ == cls, "dataset function must be the same class"
+        ds = cls(dataset.embeddings, dataset.article_ids, dataset.df, get_non_duplicates=False)
+        ds.feature = dataset.feature[indices]
+        ds.detail_desc = dataset.detail_desc[indices]
+
+        ds.article_ids_train_populated = dataset.article_ids_train_populated[indices]
+        ds.embeddings_train_populated = dataset.embeddings_train_populated[indices]
+        return ds
     
     def get_duplicates(self, train_dataset):
         product_codes, ids_filled, emb_filled = set(), [], []
@@ -288,7 +315,7 @@ class HMDatasetTrain(HMDatasetUnique):
             if product_code in product_codes: # we want to fill now
                 ids_filled.append(article_id)
                 emb_filled.append(self.embeddings[i])   
-        return ids_filled, torch.stack(emb_filled)
+        return np.array(ids_filled), torch.stack(emb_filled)
 
 def split2(dataset,set_sizes, show=False):
     train_size = int(set_sizes["train"] * len(dataset))
@@ -343,7 +370,7 @@ def loaders(datasets, batch_size):
 
 
 def fill_target(class_label, datasets): #2min
-    """Fill the feature with class of choise"""
+    """Fill the feature with class of choice"""
     for att in ['test', 'val', 'train']:
         ds = datasets[att]
         ds.classes = list(set(ds.df[class_label]))
@@ -355,38 +382,45 @@ def fill_target(class_label, datasets): #2min
             if isinstance(detail_desc, float): # 300 are empty
                 detail_desc = 'product' # just somehing
             ds.detail_desc[idx]= detail_desc
-            
-def fill_target_threshold(class_label, datasets, threshold=5000, exclude_classes=None):
- 
-    if exclude_classes is None:
-        exclude_classes = []
-        
-    for att in ['test', 'val', 'train']:
+
+def get_filtered_ids(class_label, datasets, threshold, exclude_classes):
+    keep_indexes = {
+        'test': [],
+        'val': [],
+        'train': []
+    }    
+
+    for att in keep_indexes.keys():
         ds = datasets[att]
-        ds.classes = list(set(ds.df[class_label]))
-        ds.class_to_id = {name: i for i, name in enumerate(ds.classes)}
         
         class_count = {class_name: 0 for class_name in ds.classes if class_name not in exclude_classes}
         
         for idx in tqdm(range(len(ds))):
-            embedding, article_id, _, _ = ds[idx]
+            if idx >= len(ds):
+                break
+
+            _, article_id, _, _ = ds[idx]
             target_class = ds.article_id2suclass(article_id, class_label)
             
             if target_class in exclude_classes:
                 continue
-            
-            if class_count.get(target_class, 0) < threshold:
-                ds.feature[idx] = target_class
-                detail_desc = ds.article_id2suclass(article_id, 'detail_desc')
-                
-                if isinstance(detail_desc, float):  # If description is missing
-                    detail_desc = 'product'  # Default placeholder
-                
-                ds.detail_desc[idx] = detail_desc
-                
-                class_count[target_class] += 1
-                
-                if class_count[target_class] >= threshold:
-                    continue  # Skip remaining samples of this class
 
+            if class_count[target_class] >= threshold:
+                continue  # Skip remaining samples of this class
+        
+            keep_indexes[att].append(idx)
+            class_count[target_class] += 1
+                
         print(f"Final class count for {att}: {class_count}")
+    
+    return keep_indexes
+
+def create_filtered_datasets(class_label, datasets, threshold=5000, exclude_classes=[]):
+    keep_indexes = get_filtered_ids(class_label, datasets, threshold, exclude_classes)
+    filtered_datasets = {}
+
+    filtered_datasets['train'] = HMDatasetTrain.new_filtered_dataset(datasets['train'], keep_indexes['train'])
+    filtered_datasets['test'] = HMDatasetUnique.new_filtered_dataset(datasets['test'], keep_indexes['test'])
+    filtered_datasets['val'] = HMDatasetUnique.new_filtered_dataset(datasets['val'], keep_indexes['val'])
+
+    return filtered_datasets
