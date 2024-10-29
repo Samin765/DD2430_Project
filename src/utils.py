@@ -92,5 +92,5 @@ def error_loader(dataloader):
     batch = next(dataloader_iter)
     for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(dataloader)):
         if batch_nr<4:
-            print(image_embeds, article_ids, feature, detail_desc)
+            print(image_embeds.shape, article_ids, feature, detail_desc)
             

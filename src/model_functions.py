@@ -167,7 +167,7 @@ def weighted_clip_loss(logits, labels, device, class_weights = None):
         #print(weighted_loss)
         return weighted_loss.mean()
     else:
-        return clip_loss(logits_per_image.t())
+        return clip_loss(logits.t())
     
 def weighted_clip_loss_seperated(device, similarity: torch.Tensor, labels: torch.Tensor, class_weights=None):
     if class_weights is not None:

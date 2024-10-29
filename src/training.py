@@ -243,10 +243,13 @@ class FinetuneCLIP():
 
 
     def get_class_weights(self,labels):
-        encoder = LabelEncoder()
-        encoded_labels = encoder.fit_transform(labels)
-        encoded_labels_tensor = torch.tensor(encoded_labels)
-        classes = torch.unique(encoded_labels_tensor)
-        class_weights = compute_class_weight(class_weight = 'balanced' , classes = classes.cpu().numpy(), y = encoded_labels)
-        class_weights = torch.tensor(class_weights, dtype = torch.float32, device= encoded_labels_tensor.device)
+        if not self.conf['balanced']:
+            encoder = LabelEncoder()
+            encoded_labels = encoder.fit_transform(labels)
+            encoded_labels_tensor = torch.tensor(encoded_labels)
+            classes = torch.unique(encoded_labels_tensor)
+            class_weights = compute_class_weight(class_weight = 'balanced' , classes = classes.cpu().numpy(), y = encoded_labels)
+            class_weights = torch.tensor(class_weights, dtype = torch.float32, device= encoded_labels_tensor.device)
+        else:
+            class_weights = None
         return class_weights

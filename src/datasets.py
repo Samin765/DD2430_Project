@@ -221,9 +221,9 @@ class HMDatasetDuplicates(Dataset):
         self.article_ids = article_ids # [105099]
         self.df = df
         
-        self.feature = [""]*len(article_ids) #placeholder
-        self.feature = np.full(len(article_ids), "", dtype=str)
-        self.detail_desc = np.full(len(article_ids), "", dtype=str) #placeholder
+        #self.feature = [""]*len(article_ids) #placeholder
+        self.feature = np.full(len(article_ids), "", dtype='U40') # will cap 40 chareacters, str cap 1
+        self.detail_desc = np.full(len(article_ids), "", dtype='U100') 
         self.classes = []
         self.class_to_id = {}
     
@@ -259,7 +259,7 @@ class HMDatasetUnique(HMDatasetDuplicates):
     @classmethod
     def new_filtered_dataset(cls, dataset, indices) -> 'HMDatasetUnique':
         """ Create a new dataset with only the indices in the list """
-        assert dataset.__class__ == cls, "dataset function must be the same class"
+        #assert dataset.__class__ == cls, f"dataset function must be the same class {dataset.__class__, cls}"
         ds = cls(dataset.embeddings, dataset.article_ids, dataset.df, get_non_duplicates=False)
         ds.feature = dataset.feature[indices]
         ds.detail_desc = dataset.detail_desc[indices]
@@ -294,7 +294,7 @@ class HMDatasetTrain(HMDatasetUnique):
     @classmethod
     def new_filtered_dataset(cls, dataset, indices):
         """ Create a new dataset with only the indices in the list """
-        assert dataset.__class__ == cls, "dataset function must be the same class"
+        #assert dataset.__class__ == cls, f"dataset function must be the same class {dataset.__class__, cls}"
         ds = cls(dataset.embeddings, dataset.article_ids, dataset.df, get_non_duplicates=False)
         ds.feature = dataset.feature[indices]
         ds.detail_desc = dataset.detail_desc[indices]
@@ -371,13 +371,13 @@ def loaders(datasets, batch_size):
 
 def fill_target(class_label, datasets): #2min
     """Fill the feature with class of choice"""
-    for att in ['test', 'val', 'train']:
+    for att in datasets.keys():
         ds = datasets[att]
         ds.classes = list(set(ds.df[class_label]))
         ds.class_to_id = {name: i for i, name in enumerate(ds.classes)}
         for idx in tqdm(range(len(ds))):
             embedding, article_id, _,_ = ds[idx]
-            ds.feature[idx]= ds.article_id2suclass(article_id, class_label)
+            ds.feature[idx]= ds.article_id2suclass(article_id,class_label)
             detail_desc = ds.article_id2suclass(article_id, 'detail_desc')
             if isinstance(detail_desc, float): # 300 are empty
                 detail_desc = 'product' # just somehing
@@ -390,7 +390,7 @@ def get_filtered_ids(class_label, datasets, threshold, exclude_classes):
         'train': []
     }    
 
-    for att in keep_indices.keys():
+    for att in datasets.keys(): # work for one dataset
         ds = datasets[att]
         
         class_count = {class_name: 0 for class_name in ds.classes if class_name not in exclude_classes}
@@ -422,5 +422,20 @@ def create_filtered_datasets(class_label, datasets, threshold=5000, exclude_clas
     filtered_datasets['train'] = HMDatasetTrain.new_filtered_dataset(datasets['train'], keep_indices['train'])
     filtered_datasets['test'] = HMDatasetUnique.new_filtered_dataset(datasets['test'], keep_indices['test'])
     filtered_datasets['val'] = HMDatasetUnique.new_filtered_dataset(datasets['val'], keep_indices['val'])
-
     return filtered_datasets
+
+def create_filtered_dataset_one(dataset, threshold):
+    """Only on training set"""
+    keep_indices = get_filtered_ids(class_label, {'train': dataset}, threshold, exclude_classes)
+    return HMDatasetTrain.new_filtered_dataset(dataset, keep_indices['train'])
+
+
+def get_dataloaders(main_class, data, threshold, exclude_classes, batch_size):
+    fill_target(main_class, data)
+    filtered_datasets = create_filtered_datasets(main_class,
+        data, threshold, exclude_classes)# 2min
+    fill_target(main_class, filtered_datasets)
+    for att in filtered_datasets.keys():
+        filtered_datasets[att].classes = [class_name for class_name in filtered_datasets[att].classes if class_name not in exclude_classes]
+        filtered_datasets[att].class_to_id = {name: i for i, name in enumerate(filtered_datasets[att].classes)}
+    return loaders(filtered_datasets, batch_size)
