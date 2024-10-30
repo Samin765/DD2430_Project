@@ -221,9 +221,8 @@ class HMDatasetDuplicates(Dataset):
         self.article_ids = article_ids # [105099]
         self.df = df
         
-        #self.feature = [""]*len(article_ids) #placeholder
         self.feature = np.full(len(article_ids), "", dtype='U40') # will cap 40 chareacters, str cap 1
-        self.detail_desc = np.full(len(article_ids), "", dtype='U100') 
+        self.detail_desc = np.full(len(article_ids), "", dtype='U764') # longest desc is 764
         self.classes = []
         self.class_to_id = {}
     
@@ -428,7 +427,6 @@ def create_filtered_dataset_one(dataset, threshold):
     """Only on training set"""
     keep_indices = get_filtered_ids(class_label, {'train': dataset}, threshold, exclude_classes)
     return HMDatasetTrain.new_filtered_dataset(dataset, keep_indices['train'])
-
 
 def get_dataloaders(main_class, data, threshold, exclude_classes, batch_size):
     fill_target(main_class, data)
