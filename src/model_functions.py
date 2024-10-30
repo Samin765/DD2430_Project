@@ -120,7 +120,6 @@ def get_text_emb(model, processor: CLIPProcessor, text, normalize=True):
     # normalize so norm is one, good for dot product later
     return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True) if normalize else text_embeds
 
-
 def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights, train=False, normalize_inputs=False):
     """Forward pass of clip"""
     #print(class_weights)
