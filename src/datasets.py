@@ -432,7 +432,6 @@ def get_dataloaders(main_class, data, threshold, exclude_classes, batch_size):
     fill_target(main_class, data)
     filtered_datasets = create_filtered_datasets(main_class,
         data, threshold, exclude_classes)# 2min
-    fill_target(main_class, filtered_datasets)
     for att in filtered_datasets.keys():
         filtered_datasets[att].classes = [class_name for class_name in filtered_datasets[att].classes if class_name not in exclude_classes]
         filtered_datasets[att].class_to_id = {name: i for i, name in enumerate(filtered_datasets[att].classes)}
