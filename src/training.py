@@ -202,7 +202,7 @@ class FinetuneCLIP():
                 'soft_prompts.pth', weights_only=True)
         
 
-    def initialize(self, params):
+    def initialize(self, params, load=False):
         """Initialize trainable parameters"""
         added_text = params.get('add', '')
 
@@ -213,10 +213,14 @@ class FinetuneCLIP():
         weight_decay = params.get('weight_decay', 0)
 
         if self.tt['soft']:
-            self.train_p['soft'] = nn.Parameter(torch.zeros(params['num_soft'],
-                                                self.clip['m'].text_projection.in_features), requires_grad=True)
-            tunable_params.append(self.train_p['soft'])
-            assert self.train_p['soft'].is_leaf == tunable_params[0].is_leaf
+            if not load:
+                self.train_p['soft'] = nn.Parameter(torch.zeros(params['num_soft'],
+                                                    self.clip['m'].text_projection.in_features), requires_grad=True)
+                tunable_params.append(self.train_p['soft'])
+                assert self.train_p['soft'].is_leaf == tunable_params[0].is_leaf
+            else:
+                self.load_p() # load stored parameters
+                tunable_params.append(self.train_p['soft'])
 
         if self.tt['image_fc']:
             self.image_fc = nn.Linear(512, 512).to(self.device)
