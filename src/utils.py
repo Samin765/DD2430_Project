@@ -93,4 +93,26 @@ def error_loader(dataloader):
     for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(dataloader)):
         if batch_nr<4:
             print(image_embeds.shape, article_ids, feature, detail_desc)
+
             
+def plot_histograms_different_scales(train_data, val_data, test_data):
+    """ Given dicts of counts per subclass"""
+    fig, axs = plt.subplots(1, 3, figsize=(15, 5))
+    axs[0].bar(train_data.keys(), train_data.values(), color='skyblue')
+    axs[0].set_title('Train Class Distribution')
+    axs[0].tick_params(axis='x', rotation=90)
+    
+    axs[1].bar(val_data.keys(), val_data.values(), color='lightgreen')
+    axs[1].set_title('Validation Class Distribution')
+    axs[1].tick_params(axis='x', rotation=90)
+    
+    axs[2].bar(test_data.keys(), test_data.values(), color='lightcoral')
+    axs[2].set_title('Test Class Distribution')
+    axs[2].tick_params(axis='x', rotation=90)
+    
+    for ax in axs:
+        ax.set_xlabel('Class')
+        ax.set_ylabel('Count')
+
+    plt.tight_layout()
+    plt.show()
