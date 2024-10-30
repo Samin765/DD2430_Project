@@ -260,6 +260,8 @@ class HMDatasetUnique(HMDatasetDuplicates):
         """ Create a new dataset with only the indices in the list """
         #assert dataset.__class__ == cls, f"dataset function must be the same class {dataset.__class__, cls}"
         ds = cls(dataset.embeddings, dataset.article_ids, dataset.df, get_non_duplicates=False)
+        ds.class_to_id = dataset.class_to_id
+        ds.classes = dataset.classes
         ds.feature = dataset.feature[indices]
         ds.detail_desc = dataset.detail_desc[indices]
 
@@ -297,6 +299,8 @@ class HMDatasetTrain(HMDatasetUnique):
         ds = cls(dataset.embeddings, dataset.article_ids, dataset.df, get_non_duplicates=False)
         ds.feature = dataset.feature[indices]
         ds.detail_desc = dataset.detail_desc[indices]
+        ds.classes = dataset.classes
+        ds.class_to_id = dataset.class_to_id
 
         ds.article_ids_train_populated = dataset.article_ids_train_populated[indices]
         ds.embeddings_train_populated = dataset.embeddings_train_populated[indices]
@@ -433,6 +437,7 @@ def get_dataloaders(main_class, data, threshold, exclude_classes, batch_size):
     filtered_datasets = create_filtered_datasets(main_class,
         data, threshold, exclude_classes)# 2min
     for att in filtered_datasets.keys():
-        filtered_datasets[att].classes = [class_name for class_name in filtered_datasets[att].classes if class_name not in exclude_classes]
+        filtered_datasets[att].classes =\
+            [class_name for class_name in filtered_datasets[att].classes if class_name not in exclude_classes]
         filtered_datasets[att].class_to_id = {name: i for i, name in enumerate(filtered_datasets[att].classes)}
     return loaders(filtered_datasets, batch_size)

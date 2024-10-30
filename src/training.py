@@ -42,11 +42,8 @@ class FinetuneCLIP():
                     for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
                         
                         self.optimizer.zero_grad()
-                        
-                   
                         batch_class_weights = self.get_class_weights(feature)
-                        #print(class_weights)
-                        _, loss = self.forward(image_embeds, feature, self.conf['balanced'], class_weights = batch_class_weights)
+                        _, loss = self.forward(image_embeds, labels=feature, balanced=self.conf['balanced'], class_weights=batch_class_weights)
                         loss.backward()
                         self.optimizer.step()
                         running_loss += loss.detach().item()
@@ -92,8 +89,6 @@ class FinetuneCLIP():
         with torch.no_grad():
             if self.conf['balanced']:
                 for batch_nr, (image_embeds, labels, _, _) in enumerate(tqdm(self.dataloaders['test'])):
-                    #logits_per_image, _ = self.forward(
-                    #    image_embeds, self.dataloaders['test'].dataset.classes)
                     batch_class_weights = self.get_class_weights(labels)
                     logits_per_image, _ = self.forward(image_embeds, self.dataloaders['test'].dataset.classes, self.conf['balanced'], class_weights = batch_class_weights)
 
@@ -105,12 +100,9 @@ class FinetuneCLIP():
                             self.dataloaders['test'].dataset.class_to_id[lab])
             else:
                 for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
-                    #logits_per_image, _ = self.forward(
-                    #    image_embeds, self.dataloaders['test'].dataset.classes)
                     batch_class_weights = self.get_class_weights(feature)
                     logits_per_image, _ = self.forward(image_embeds, self.dataloaders['test'].dataset.classes, self.conf['balanced'], class_weights = batch_class_weights)
 
-                    # probs = logits_per_image.softmax(dim=-1).cpu().numpy()
                     predicted_class = logits_per_image.argmax(dim=-1)
                     all_predictions.append(predicted_class)
                     for lab in feature:
