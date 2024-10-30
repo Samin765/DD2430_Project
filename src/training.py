@@ -19,7 +19,7 @@ class FinetuneCLIP():
         self.es = {'pat': 10, 'curr_pat': 0, 'min_loss': np.inf, 'best_model':clip['m']}  # early stop
         self.conf = {'epochs': epochs, 'balanced':True}
         self.train_p = {}  # Store trainable parameters here
-        self.tt = {'soft': 1, 'LoRA': 0, 'image_fc': 0}  # tuning method to use
+        self.tt = {'soft': 1, 'LoRA': 0, 'image_fc': 0, 'desc': 0}  # tuning method to use
         self.optimizer = None  # config in initialize
         self.image_fc = None  # config in initialize
         self.device = torch.device(
@@ -59,30 +59,49 @@ class FinetuneCLIP():
                 pbar.set_postfix({"Patience": f"{self.es['curr_pat']} / {self.es['pat']}"})
                 pbar.update(1)
             return self.loss, self.train_p
-                
 
-    def forward(self, image_embeds, labels, balanced, class_weights = None):
+    def forward(self, image_embeds, labels, balanced, class_weights = None, descriptions=None):
         """Get predictions of the model, add more here for different tuning methods"""
         train = True if image_embeds.shape[0] == len(labels) else False
-        text = [self.train_p['add']+i for i in labels]
-        print('text', text)
+        texts = []
+        
+        if descriptions and self.tt['desc']:
+            for desc in descriptions:
+                new_text =\
+                    [f'An image of clothing with name: {label}, and description: {desc}' for label in labels]
+                texts.append(new_text)
+        else:
+            texts = [self.train_p['add']+i for i in labels]
+        
+        print('texts', texts[0])
+
         # image_embeds, _ = get_image_emb(model, processor, return_normal(images, processor, 0, False)) #SLOW
 
         # image_fc is just adding a fc layer to the image embeddings
         # so we can do that before soft and lora because they are only applied to text
         if self.tt['image_fc']:
             image_embeds = self.image_fc(image_embeds)
-
         if self.tt['soft']:
             text_embeds = model_functions.get_text_emb_soft(
-                self.clip['m'], self.clip['p'], text, self.train_p['soft'])
-            logits_per_image, loss = model_functions.apply_clip(
-                text_embeds, image_embeds, self.clip['m'],balanced, train=train, labels = labels, class_weights = class_weights)
+                self.clip['m'], self.clip['p'], texts, self.train_p['soft'])
+        elif self.tt['desc']:
+            assert descriptions is not None
+            embs = []
+            for text in texts:
+                embs.append(model_functions.get_text_emb(
+                    self.clip['m'], self.clip['p'], text))
+            text_embeds = torch.cat(embs)
         else:
             text_embeds = model_functions.get_text_emb(
-                self.clip['m'], self.clip['p'], text)
-            logits_per_image, loss = model_functions.apply_clip(
-                text_embeds, image_embeds, self.clip['m'], balanced = balanced, train=train, labels = labels, class_weights = class_weights)
+                self.clip['m'], self.clip['p'], texts)
+
+        logits_per_image, loss = model_functions.apply_clip(
+            text_embeds, image_embeds,
+            self.clip['m'], balanced=balanced,
+            train=train, labels=labels,
+            class_weights=class_weights,
+        )
+
         return logits_per_image, loss
 
     def eval(self, show_image=False):
@@ -90,9 +109,15 @@ class FinetuneCLIP():
         all_predictions, all_labels = [], []
         with torch.no_grad():
             if self.conf['balanced']:
-                for batch_nr, (image_embeds, labels, _, _) in enumerate(tqdm(self.dataloaders['test'])):
+                for batch_nr, (image_embeds, labels, _, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
                     batch_class_weights = self.get_class_weights(labels)
-                    logits_per_image, _ = self.forward(image_embeds, self.dataloaders['test'].dataset.classes, self.conf['balanced'], class_weights = batch_class_weights)
+                    logits_per_image, _ = self.forward(
+                        image_embeds,
+                        self.dataloaders['test'].dataset.classes,
+                        self.conf['balanced'],
+                        class_weights=batch_class_weights,
+                        descriptions=detail_desc
+                        )
 
                     # probs = logits_per_image.softmax(dim=-1).cpu().numpy()
                     predicted_class = logits_per_image.argmax(dim=-1)
@@ -103,7 +128,13 @@ class FinetuneCLIP():
             else:
                 for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
                     batch_class_weights = self.get_class_weights(feature)
-                    logits_per_image, _ = self.forward(image_embeds, self.dataloaders['test'].dataset.classes, self.conf['balanced'], class_weights = batch_class_weights)
+                    logits_per_image, _ = self.forward(
+                        image_embeds,
+                        self.dataloaders['test'].dataset.classes,
+                        self.conf['balanced'],
+                        class_weights=batch_class_weights,
+                        descriptions=detail_desc, 
+                        )
 
                     predicted_class = logits_per_image.argmax(dim=-1)
                     all_predictions.append(predicted_class)
