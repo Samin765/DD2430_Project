@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask, _create_4d_causal_attention_mask
 from transformers.models.clip.modeling_clip import clip_loss
+from transformers.models.clip.processing_clip import CLIPProcessor
+from transformers.models.clip.tokenization_clip_fast import CLIPTokenizerFast
 from sklearn.preprocessing import LabelEncoder
 
 
@@ -73,7 +75,7 @@ class LoRALayerAttn(nn.Module):
 # Needed to create the dataset
 
 
-def get_image_emb(model, processor, images, normalize=True):
+def get_image_emb(model, processor: CLIPProcessor, images, normalize=True):
     """Given an tensor of batch images returns the batch image embeddings [batch, 512]"""
 
     # print(model.vision_model, processor.image_processor)
@@ -99,12 +101,12 @@ def get_image_emb(model, processor, images, normalize=True):
     return image_embeds, prosessed_images
 
 
-def get_text_emb(model, processor, text, normalize=True):
+def get_text_emb(model, processor: CLIPProcessor, text, normalize=True):
     """Given an tensor of batch text returns the batch text embeddings [batch, 512],
     define X as the number of tokens and might differ from text length"""
     # print(model.text_model, processor.tokenizer)
     text_model = model.text_model  # VIT
-    text_tokenizer = processor.tokenizer  # tokenize the input
+    text_tokenizer: CLIPTokenizerFast = processor.tokenizer  # tokenize the input
     text_projection = model.text_projection  # fc layer
     # tokenize, returns 2 tensors, tokens and attention mask [batch, X]
     tokenized_text = text_tokenizer(
@@ -190,7 +192,7 @@ def contrastive_loss(device , logits: torch.Tensor) -> torch.Tensor:
     return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
 
 
-def get_text_emb_soft(model, processor, text, soft_prompt_hidden):
+def get_text_emb_soft(model, processor: CLIPProcessor, text, soft_prompt_hidden):
     """Just like get_text_emb but for sof prompts,
     define X as the number of tokens and might differ from text length"""
     device = model.device
@@ -233,7 +235,7 @@ def get_text_emb_soft(model, processor, text, soft_prompt_hidden):
     return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
 
 
-def get_text_emb_soft_loralt(model, processor, text, soft_prompt_hidden, text_lora_layer):
+def get_text_emb_soft_loralt(model, processor: CLIPProcessor, text, soft_prompt_hidden, text_lora_layer):
     """Just like get_text_emb but for sof prompts,
     define X as the number of tokens and might differ from text length"""
     # print(model.text_model, processor.tokenizer)

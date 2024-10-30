@@ -13,6 +13,7 @@ from sklearn.preprocessing import LabelEncoder
 class FinetuneCLIP():
     def __init__(self, dataloaders, clip, epochs=200):
         self.dataloaders = dataloaders
+        # TODO decide if processor should have is_split_into_words = True
         self.clip = clip  # model and processor
         self.loss = {'train': [], 'val': []}
         self.es = {'pat': 10, 'curr_pat': 0, 'min_loss': np.inf, 'best_model':clip['m']}  # early stop
@@ -64,6 +65,7 @@ class FinetuneCLIP():
         """Get predictions of the model, add more here for different tuning methods"""
         train = True if image_embeds.shape[0] == len(labels) else False
         text = [self.train_p['add']+i for i in labels]
+        print('text', text)
         # image_embeds, _ = get_image_emb(model, processor, return_normal(images, processor, 0, False)) #SLOW
 
         # image_fc is just adding a fc layer to the image embeddings
