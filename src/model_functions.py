@@ -141,13 +141,14 @@ def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights
     loss = 0
     if train:  # must have same ammount of text as images for training
         #loss = clip_loss(logits_per_image.t())
-        if balanced:
-            loss = clip_loss(logits_per_image.t())
-            #print("balanced")
-        else:
-            #print("unbalanced")
-            #loss = clip_loss_default(device, logits_per_image.t())
-            loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights)
+        # if balanced:
+        #     loss = clip_loss(logits_per_image.t())
+        #     #print("balanced")
+        # else:
+        #     #print("unbalanced")
+        #     #loss = clip_loss_default(device, logits_per_image.t())
+        #     loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights)
+        loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights)
     
 
     return logits_per_image, loss
