@@ -8,6 +8,7 @@ import torch.nn as nn
 import copy
 from sklearn.utils.class_weight import compute_class_weight
 from sklearn.preprocessing import LabelEncoder
+import time
 
 
 class FinetuneCLIP():
@@ -24,6 +25,7 @@ class FinetuneCLIP():
         self.image_fc = None  # config in initialize
         self.device = torch.device(
             "cuda" if torch.cuda.is_available() else "cpu")
+        self.model_prefix = ""
 
     def train(self):
         """Training loop"""
@@ -50,7 +52,12 @@ class FinetuneCLIP():
                         running_loss += loss.detach().item()
                         del image_embeds, article_ids, feature, detail_desc, loss
                         torch.cuda.empty_cache()  
-                    
+                
+                if epoch != 0 and epoch % 100 == 0:
+                    for key in ['soft', 'LoRA', 'image_fc']:
+                        if self.tt[key]:
+                            torch.save(
+                                self.train_p[key], f'{self.model_prefix}_{key}_{epoch}.pth')
                     
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
                 if self.earlystop():
@@ -72,8 +79,6 @@ class FinetuneCLIP():
                 texts.append(new_text)
         else:
             texts = [self.train_p['add']+i for i in labels]
-        
-        print('texts', texts[0])
 
         # image_embeds, _ = get_image_emb(model, processor, return_normal(images, processor, 0, False)) #SLOW
 
@@ -177,7 +182,7 @@ class FinetuneCLIP():
                         self.es['best_model'] = copy.deepcopy(self.clip['m'])
                         if self.tt['soft']:
                             torch.save(
-                                self.train_p['soft'], 'soft_prompts.pth')
+                                self.train_p['soft'], f'{self.model_prefix}_soft_prompts.pth')
                         
                         self.es['curr_pat'] += 1
                 else:
@@ -225,6 +230,8 @@ class FinetuneCLIP():
         if self.tt['soft']:
             self.train_p['soft'] = torch.load(
                 'soft_prompts.pth', weights_only=True)
+        if self.tt['LoRA']:
+            self.train_p['LoRA'] = torch.load('LoRA.pth', weights_only=True)
         
 
     def initialize(self, params, load=False):
