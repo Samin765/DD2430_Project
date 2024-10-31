@@ -154,7 +154,7 @@ class FinetuneCLIP():
         print('Accuracy', acc)
         return all_predictions, all_labels, acc
 
-    def earlystop(self):
+    def earlystop(self, epoch=None):
         """Stop training when val loss start to increase"""
         with torch.no_grad():
             running_loss = 0.0  # last batch can be smaller
@@ -174,6 +174,10 @@ class FinetuneCLIP():
                     running_loss += loss.item()
 
             self.loss['val'].append(running_loss/len(self.dataloaders['val']))
+            # write loss to file
+            with open(f'{self.model_prefix}_loss.txt', 'a') as f:
+                f.write(f'{running_loss/len(self.dataloaders["val"])}\n')
+
             if len(self.loss['val']) > 2:  # early stop
                 if self.es['curr_pat'] == 0:
                     # if val_loss increase first time
