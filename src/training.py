@@ -180,9 +180,10 @@ class FinetuneCLIP():
                     if running_loss > self.loss['val'][-2]:
                         self.es['min_loss'] = running_loss
                         self.es['best_model'] = copy.deepcopy(self.clip['m'])
-                        if self.tt['soft']:
-                            torch.save(
-                                self.train_p['soft'], f'{self.model_prefix}_soft_prompts.pth')
+                        for key in ['soft', 'LoRA', 'image_fc']:
+                            if self.tt[key]:
+                                torch.save(
+                                    self.train_p[key], f'{self.model_prefix}_{key}.pth')
                         
                         self.es['curr_pat'] += 1
                 else:
