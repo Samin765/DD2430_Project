@@ -188,12 +188,13 @@ class FinetuneCLIP():
                     if running_loss > self.loss['val'][-2]:
                         self.es['min_loss'] = running_loss
                         self.es['best_model'] = copy.deepcopy(self.clip['m'])
+                        print('Current best epoch:', epoch)
                         if self.tt['soft']:
                             torch.save(
-                                self.train_p['soft'], f'{self.model_prefix}_soft_prompts.pth')
+                                self.train_p['soft'], f'{self.model_prefix}_soft.pth')
                         if self.tt['LoRA']:
                             torch.save(
-                                self.clip['m'].state_dict(), f'{self.model_prefix}_lora_model.pth'
+                                self.clip['m'].state_dict(), f'{self.model_prefix}_lora.pth'
                             )
                         
                         self.es['curr_pat'] += 1
@@ -242,11 +243,11 @@ class FinetuneCLIP():
         """Load trained parameters, add more here"""
         self.clip['m'] = self.es['best_model'] # the parameters at minimum
         if self.tt['soft']:
-            file_name = 'soft_prompts.pth' if file_name is None else file_name
+            file_name = f'{self.model_prefix}_soft.pth' if file_name is None else file_name
             self.train_p['soft'] = torch.load(file_name)
         elif self.tt['LoRA']:
-            file_name = 'lora.pth' if file_name is None else file_name
-            self.train_p['LoRA'] = torch.load(file_name)
+            file_name = f'{self.model_prefix}_lora.pth' if file_name is None else file_name
+            self.clip['m'].load_state_dict(torch.load(file_name))
         else:
             raise Exception('Need to specify file_name or have a tuning method')
 
@@ -277,7 +278,10 @@ class FinetuneCLIP():
         if self.tt['LoRA']:
             if load:
                 self.load_p(file_name=file_name) # load stored parameters
-                tunable_params += list(self.train_p['LoRA'])
+                lora_params_attention = model_functions.get_lora_params(
+                   self.clip['m'], print_layer=False
+                )
+                tunable_params += list(lora_params_attention)
             else:
                 self.train_p['LoRA'] = params['LoRA']
                 tunable_params += list(params['LoRA'])
@@ -295,7 +299,6 @@ class FinetuneCLIP():
         num_params = sum(p.numel()
                          for p in self.optimizer.param_groups[0]['params'])
         print(f'Total number of parameters in the optimizer: {num_params}')
-
 
     def get_class_weights(self,labels):
         if not self.conf['balanced']:
