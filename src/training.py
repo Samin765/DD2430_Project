@@ -65,7 +65,7 @@ class FinetuneCLIP():
                     self.plot_loss_key('val', epoch)
 
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
-                if self.earlystop():
+                if self.earlystop(epoch):
                     self.load_p()  # get parameters best found
                     return self.loss, self.train_p
                 pbar.set_postfix({"Patience": f"{self.es['curr_pat']} / {self.es['pat']}"})
