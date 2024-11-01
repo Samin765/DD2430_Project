@@ -247,7 +247,7 @@ class FinetuneCLIP():
         else:
             raise Exception('Need to specify file_name or have a tuning method')
 
-    def initialize(self, params, load=False):
+    def initialize(self, params, load=False, file_name=None):
         """Initialize trainable parameters"""
         added_text = params.get('add', '')
 
@@ -272,11 +272,14 @@ class FinetuneCLIP():
             tunable_params += list(self.image_fc.parameters())
 
         if self.tt['LoRA']:
-            self.train_p['LoRA'] = params['LoRA']
-            tunable_params += list(params['LoRA'])
+            if load:
+                self.load_p(file_name=file_name) # load stored parameters
+                tunable_params.append(self.train_p['soft'])
+            else:
+                self.train_p['LoRA'] = params['LoRA']
+                tunable_params += list(params['LoRA'])
 
         # Add more options here if you need to
-
         if tunable_params:
             self.optimizer = torch.optim.Adam(
                 tunable_params, lr=lr, weight_decay=weight_decay)
