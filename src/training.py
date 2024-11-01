@@ -274,7 +274,7 @@ class FinetuneCLIP():
         if self.tt['LoRA']:
             if load:
                 self.load_p(file_name=file_name) # load stored parameters
-                tunable_params.append(self.train_p['soft'])
+                tunable_params.append(self.train_p['LoRA'])
             else:
                 self.train_p['LoRA'] = params['LoRA']
                 tunable_params += list(params['LoRA'])
