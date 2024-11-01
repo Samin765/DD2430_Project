@@ -53,12 +53,15 @@ class FinetuneCLIP():
                         del image_embeds, article_ids, feature, detail_desc, loss
                         torch.cuda.empty_cache()  
                 
-                if epoch != 0 and epoch % 100 == 0:
+                if epoch > 100 and epoch % 10 == 0:
                     for key in ['soft', 'LoRA', 'image_fc']:
                         if self.tt[key]:
                             torch.save(
                                 self.train_p[key], f'{self.model_prefix}_{key}_{epoch}.pth')
-                    
+                    self.eval()
+                    all_predictions, all_labels, acc = self.eval(False)
+                    print(f"Accuracy of baseline is {acc:.2f}% at epoch {epoch}")
+
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
                 if self.earlystop():
                     self.load_p()  # get parameters best found
