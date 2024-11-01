@@ -232,17 +232,14 @@ class FinetuneCLIP():
     def load_p(self, file_name=None):
         """Load trained parameters, add more here"""
         self.clip['m'] = self.es['best_model'] # the parameters at minimum
-        if file_name is None:
-            if self.tt['soft']:
-                file_name = 'soft_prompts.pth'
-            elif self.tt['LoRA']:
-                file_name = 'lora.pth'
-            else:
-                raise Exception('No file name given')
-
-        self.train_p['soft'] = torch.load(
-            file_name, weights_only=True)
-        
+        if self.tt['soft']:
+            file_name = 'soft_prompts.pth' if file_name is None else file_name
+            self.train_p['soft'] = torch.load(file_name)
+        elif self.tt['LoRA']:
+            file_name = 'lora.pth' if file_name is None else file_name
+            self.train_p['LoRA'] = torch.load(file_name)
+        else:
+            raise Exception('Need to specify file_name or have a tuning method')
 
     def initialize(self, params, load=False):
         """Initialize trainable parameters"""
