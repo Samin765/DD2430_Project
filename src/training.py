@@ -61,6 +61,8 @@ class FinetuneCLIP():
                     self.eval()
                     all_predictions, all_labels, acc = self.eval(False)
                     print(f"Accuracy of baseline is {acc:.2f}% at epoch {epoch}")
+                    self.plot_loss_key('train', epoch)
+                    self.plot_loss_key('val', epoch)
 
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
                 if self.earlystop():
@@ -147,7 +149,6 @@ class FinetuneCLIP():
                     predicted_class = logits_per_image.argmax(dim=-1)
                     all_predictions.append(predicted_class)
                     for lab in feature:
-     
                         all_labels.append(
                             self.dataloaders['test'].dataset.class_to_id[lab])
                    
@@ -220,7 +221,7 @@ class FinetuneCLIP():
         plt.grid(True)
         plt.show()
         
-    def plot_loss_key(self, key):
+    def plot_loss_key(self, key, epoch):
         plt.figure(figsize=(10, 6))
         plt.plot(list(range(1, len(self.loss[key])+1)),
                  self.loss[key], label=f'{key} Loss')
@@ -231,6 +232,8 @@ class FinetuneCLIP():
         plt.legend()
         plt.grid(True)
         plt.show()
+        plt.savefig(f'{self.model_prefix}_{key}_loss_{epoch}.png')
+
 
     def load_p(self, file_name=None):
         """Load trained parameters, add more here"""
