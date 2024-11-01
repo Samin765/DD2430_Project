@@ -54,10 +54,10 @@ class FinetuneCLIP():
                         torch.cuda.empty_cache()  
                 
                 if epoch > 100 and epoch % 10 == 0:
-                    for key in ['soft', 'LoRA', 'image_fc']:
-                        if self.tt[key]:
-                            torch.save(
-                                self.train_p[key], f'{self.model_prefix}_{key}_{epoch}.pth')
+                    if self.tt['LoRA']:
+                        torch.save(
+                            self.clip['m'].state_dict(), f'{self.model_prefix}_lora_model_{epoch}.pth'
+                        )
                     self.eval()
                     all_predictions, all_labels, acc = self.eval(False)
                     print(f"Accuracy of baseline is {acc:.2f}% at epoch {epoch}")
@@ -188,10 +188,13 @@ class FinetuneCLIP():
                     if running_loss > self.loss['val'][-2]:
                         self.es['min_loss'] = running_loss
                         self.es['best_model'] = copy.deepcopy(self.clip['m'])
-                        for key in ['soft', 'LoRA', 'image_fc']:
-                            if self.tt[key]:
-                                torch.save(
-                                    self.train_p[key], f'{self.model_prefix}_{key}.pth')
+                        if self.tt['soft']:
+                            torch.save(
+                                self.train_p['soft'], f'{self.model_prefix}_soft_prompts.pth')
+                        if self.tt['LoRA']:
+                            torch.save(
+                                self.clip['m'].state_dict(), f'{self.model_prefix}_lora_model.pth'
+                            )
                         
                         self.es['curr_pat'] += 1
                 else:
