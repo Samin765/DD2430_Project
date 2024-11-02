@@ -29,6 +29,7 @@ class FinetuneCLIP():
 
     def train(self):
         """Training loop"""
+        encoder = LabelEncoder()  
         self.clip['m'].train()
         with tqdm(total=self.conf['epochs'], desc="Training", unit="epoch") as pbar:
             for epoch in range(self.conf['epochs']):
@@ -36,8 +37,9 @@ class FinetuneCLIP():
                 if self.conf['balanced']:
                     for batch_nr, (image_embeds, labels, _, _) in enumerate(self.dataloaders['train']):
                         self.optimizer.zero_grad()
-                        batch_class_weights = self.get_class_weights(labels)
-                        _, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights = batch_class_weights)
+                        encoded_labels = encoder.fit_transform(labels)
+                        batch_class_weights = self.get_class_weights(labels, encoded_labels)
+                        _, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights = batch_class_weights, encoded_labels = encoded_labels)
                         loss.backward()
                         self.optimizer.step()
                         running_loss += loss.item()
@@ -45,8 +47,9 @@ class FinetuneCLIP():
                     for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
                         
                         self.optimizer.zero_grad()
-                        batch_class_weights = self.get_class_weights(feature)
-                        _, loss = self.forward(image_embeds, labels=feature, balanced=self.conf['balanced'], class_weights=batch_class_weights)
+                        encoded_labels = encoder.fit_transform(feature)
+                        batch_class_weights = self.get_class_weights(feature, encoded_labels)
+                        _, loss = self.forward(image_embeds, labels=feature, balanced=self.conf['balanced'], class_weights=batch_class_weights, encoded_labels = encoded_labels)
                         loss.backward()
                         self.optimizer.step()
                         running_loss += loss.detach().item()
@@ -58,21 +61,21 @@ class FinetuneCLIP():
                         torch.save(
                             self.clip['m'].state_dict(), f'{self.model_prefix}_lora_model_{epoch}.pth'
                         )
-                    self.eval()
-                    all_predictions, all_labels, acc = self.eval(False)
+                    self.eval(encoded_labels)
+                    all_predictions, all_labels, acc = self.eval(encoded_labels,False)
                     print(f"Accuracy of baseline is {acc:.2f}% at epoch {epoch}")
                     self.plot_loss_key('train', epoch)
                     self.plot_loss_key('val', epoch)
 
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
-                if self.earlystop(epoch):
+                if self.earlystop(encoded_labels):
                     self.load_p()  # get parameters best found
                     return self.loss, self.train_p
                 pbar.set_postfix({"Patience": f"{self.es['curr_pat']} / {self.es['pat']}"})
                 pbar.update(1)
             return self.loss, self.train_p
 
-    def forward(self, image_embeds, labels, balanced, class_weights = None, descriptions=None):
+    def forward(self, image_embeds, labels, balanced, class_weights = None, descriptions=None ,encoded_labels = None):
         """Get predictions of the model, add more here for different tuning methods"""
         train = True if image_embeds.shape[0] == len(labels) else False
         texts = []
@@ -110,17 +113,20 @@ class FinetuneCLIP():
             self.clip['m'], balanced=balanced,
             train=train, labels=labels,
             class_weights=class_weights,
+            encoded_labels = encoded_labels
         )
 
         return logits_per_image, loss
 
-    def eval(self, show_image=False):
+    def eval(self, encoded_labels = None, show_image=False):
         """Evaluate model on test set"""
+        encoder = LabelEncoder() 
         all_predictions, all_labels = [], []
         with torch.no_grad():
             if self.conf['balanced']:
                 for batch_nr, (image_embeds, labels, _, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
-                    batch_class_weights = self.get_class_weights(labels)
+                    encoded_labels = encoder.fit_transform(flabels)
+                    batch_class_weights = self.get_class_weights(labels, encoded_labels)
                     logits_per_image, _ = self.forward(
                         image_embeds,
                         self.dataloaders['test'].dataset.classes,
@@ -137,13 +143,15 @@ class FinetuneCLIP():
                             self.dataloaders['test'].dataset.class_to_id[lab])
             else:
                 for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
-                    batch_class_weights = self.get_class_weights(feature)
+                    encoded_labels = encoder.fit_transform(feature)
+                    batch_class_weights = self.get_class_weights(feature, encoded_labels)
                     logits_per_image, _ = self.forward(
                         image_embeds,
                         self.dataloaders['test'].dataset.classes,
                         self.conf['balanced'],
                         class_weights=batch_class_weights,
-                        descriptions=detail_desc, 
+                        descriptions=detail_desc,
+                        encoded_labels = encoded_labels
                         )
 
                     predicted_class = logits_per_image.argmax(dim=-1)
@@ -158,7 +166,8 @@ class FinetuneCLIP():
         print('Accuracy', acc)
         return all_predictions, all_labels, acc
 
-    def earlystop(self, epoch=None):
+    def earlystop(self, encoded_labels = None, epoch=None):
+        encoder = LabelEncoder() 
         """Stop training when val loss start to increase"""
         with torch.no_grad():
             running_loss = 0.0  # last batch can be smaller
@@ -166,15 +175,17 @@ class FinetuneCLIP():
             if self.conf['balanced']:
                 for batch_nr, (image_embeds, labels, _,_) in enumerate(self.dataloaders['val']):
                     #_, loss = self.forward(image_embeds, labels)
-                    batch_class_weights = self.get_class_weights(labels)
-                    _, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights = batch_class_weights)
+                    encoded_labels = encoder.fit_transform(labels)
+                    batch_class_weights = self.get_class_weights(labels, encoded_labels)
+                    _, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights = batch_class_weights, encoded_labels = encoded_labels)
 
                     running_loss += loss.item()
             else:
                 for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
                     #_, loss = self.forward(image_embeds, feature)
-                    batch_class_weights = self.get_class_weights(feature)
-                    _, loss = self.forward(image_embeds, feature, self.conf['balanced'], class_weights = batch_class_weights)
+                    encoded_labels = encoder.fit_transform(feature)
+                    batch_class_weights = self.get_class_weights(feature, encoded_labels)
+                    _, loss = self.forward(image_embeds, feature, self.conf['balanced'], class_weights = batch_class_weights, encoded_labels = encoded_labels)
                     running_loss += loss.item()
 
             self.loss['val'].append(running_loss/len(self.dataloaders['val']))
@@ -300,10 +311,10 @@ class FinetuneCLIP():
                          for p in self.optimizer.param_groups[0]['params'])
         print(f'Total number of parameters in the optimizer: {num_params}')
 
-    def get_class_weights(self,labels):
+    def get_class_weights(self,labels , encoded_labels):
         if not self.conf['balanced']:
-            encoder = LabelEncoder()
-            encoded_labels = encoder.fit_transform(labels)
+            #encoder = LabelEncoder()
+            #encoded_labels = encoder.fit_transform(labels)
             encoded_labels_tensor = torch.tensor(encoded_labels)
             classes = torch.unique(encoded_labels_tensor)
             class_weights = compute_class_weight(class_weight = 'balanced' , classes = classes.cpu().numpy(), y = encoded_labels)
