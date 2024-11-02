@@ -120,12 +120,12 @@ def get_text_emb(model, processor: CLIPProcessor, text, normalize=True):
     # normalize so norm is one, good for dot product later
     return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True) if normalize else text_embeds
 
-def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights, train=False, normalize_inputs=False):
+def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights, encoded_labels, train=False, normalize_inputs=False):
     """Forward pass of clip"""
     #print(class_weights)
 
-    encoder = LabelEncoder()
-    encoded_labels = encoder.fit_transform(labels)
+    #encoder = LabelEncoder()
+    #encoded_labels = encoder.fit_transform(labels)
     encoded_labels_tensor = torch.tensor(encoded_labels)
     
     if normalize_inputs:
@@ -148,16 +148,16 @@ def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights
         #     #print("unbalanced")
         #     #loss = clip_loss_default(device, logits_per_image.t())
         #     loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights)
-        loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights)
+        loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights, encoded_labels)
     
 
     return logits_per_image, loss
 
-def weighted_clip_loss(logits, labels, device, class_weights = None):
+def weighted_clip_loss(logits, labels, device, class_weights = None , encoded_labels = None):
     #tensor_labels = torch.tensor(labels)
     
-    encoder = LabelEncoder()
-    encoded_labels = encoder.fit_transform(labels)
+    #encoder = LabelEncoder()
+    #encoded_labels = encoder.fit_transform(labels)
     encoded_labels_tensor = torch.tensor(encoded_labels)
     
     if class_weights is not None:
