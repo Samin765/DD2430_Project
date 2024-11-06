@@ -54,8 +54,8 @@ class LoRALayerAttn(nn.Module):
         # print(a_string)
 
         # Register lora_A and lora_B as parameters for this specific layer
-        self.register_parameter('lora_A', self.lora_A)
-        self.register_parameter('lora_B', self.lora_B)
+        self.register_parameter(a_string, self.lora_A)
+        self.register_parameter(b_string, self.lora_B)
 
         # Scaling factor
         self.scaling = alpha
