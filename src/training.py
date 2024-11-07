@@ -140,7 +140,7 @@ class FinetuneCLIP():
             loss.backward()
             self.optimizer.step()
             running_loss += loss.item()
-            print(labels)
+            #print(labels)
 
 
     def forward(self, image_embeds, labels, balanced, class_weights = None, descriptions=None ,encoded_labels = None):
