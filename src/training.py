@@ -16,6 +16,12 @@ class FinetuneCLIP():
         self.dataloaders = dataloaders
         # TODO decide if processor should have is_split_into_words = True
         self.clip = clip  # model and processor
+        ## HARD MINING VARIABLES ##
+        self.hard_mining = False #False --> Disable Hard Mining
+        self.hard_sample_threshold = 50 #loss for hard samples
+        self.max_hard_samples = 500
+        self.hard_samples = []  # Track hard samples
+        ##########################
         self.loss = {'train': [], 'val': []}
         self.es = {'pat': 10, 'curr_pat': 0, 'min_loss': np.inf, 'best_model':clip['m']}  # early stop
         self.conf = {'epochs': epochs, 'balanced':True}
@@ -30,9 +36,19 @@ class FinetuneCLIP():
     def train(self):
         """Training loop"""
         encoder = LabelEncoder()  
+        Debug = False
         self.clip['m'].train()
         with tqdm(total=self.conf['epochs'], desc="Training", unit="epoch") as pbar:
             for epoch in range(self.conf['epochs']):
+                max_loss_in_epoch = -9999
+                epoch_hard_samples = []  # Initialize for each epoch
+                # Print the learning rate and number of parameters in the optimizer
+                lr = self.optimizer.param_groups[0]['lr']
+                num_params = sum(p.numel() for p in self.optimizer.param_groups[0]['params'])
+                ##DEBUG##
+                print(f"Epoch {epoch}: Optimizer - Learning Rate: {lr}, Number of Parameters: {num_params}")
+                ##DEBUG##
+                loss_values = []  # List to store loss values for the current epoch
                 running_loss, n_data, n_data = 0.0, 0, 0
                 if self.conf['balanced']:
                     for batch_nr, (image_embeds, labels, _, _) in enumerate(self.dataloaders['train']):
@@ -45,22 +61,57 @@ class FinetuneCLIP():
                         running_loss += loss.item()
                 else:
                     for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
-                        
+                         ##DEBUG##
+                        if epoch > 20 and Debug:
+                            if batch_nr % 10 == 0: 
+                                print(f"Epoch {epoch}, Batch {batch_nr}: Memory Allocated = {torch.cuda.memory_allocated(self.device)}, Cached = {torch.cuda.memory_reserved(self.device)}")
+                            if len(np.unique(feature)) != 18:
+                                print(f"Epoch {epoch}, Batch {batch_nr}: Number of Unique Labels in Batch = {len(np.unique(feature))}")
+                            ##DEBUG##
                         self.optimizer.zero_grad()
                         encoded_labels = encoder.fit_transform(feature)
                         batch_class_weights = self.get_class_weights(feature, encoded_labels)
                         _, loss = self.forward(image_embeds, labels=feature, balanced=self.conf['balanced'], class_weights=batch_class_weights, encoded_labels = encoded_labels)
+                        # Hard Mining#
+                        max_loss_in_epoch = max(max_loss_in_epoch, loss.item())  # Update max loss
+                        loss_values.append(loss.item())
+                        if loss.item() > self.hard_sample_threshold:  
+                            epoch_hard_samples.append((image_embeds, feature))
                         loss.backward()
                         self.optimizer.step()
                         running_loss += loss.detach().item()
                         del image_embeds, article_ids, feature, detail_desc, loss
-                        torch.cuda.empty_cache()  
+                        torch.cuda.empty_cache()                  
                 
+                if self.hard_mining:
+                    
+                    if epoch % 10 == 0:
+                        #self.hard_sample_threshold = threshold
+                        loss_mean = np.mean(loss_values)
+                        loss_std = np.std(loss_values)
+                        threshold = loss_mean + 2 * loss_std
+                        self.hard_sample_threshold = max_loss_in_epoch * 0.8
+                        print(f"Suggested threshold for hard examples: {threshold}")
+                        print(f"Epoch {epoch}: Max loss encountered = {max_loss_in_epoch}, Hard sample threshold set to {self.hard_sample_threshold}")
+                    
+                    if epoch > 10 and self.loss['val'][-1] > self.loss['val'][-2]:  # Increase if validation loss rises
+                        self.max_hard_samples = min(len(self.dataloaders['train'].dataset), self.max_hard_samples + 20)
+                    elif epoch % 10 == 0 and self.max_hard_samples > 50:  # Reduce periodically if high
+                        self.max_hard_samples = max(50, self.max_hard_samples - 10)
+                    #hard_example_count = sum(loss > self.hard_sample_threshold for loss in loss_values)
+                    
+                    self.hard_samples.extend(epoch_hard_samples)
+                    self.hard_samples = self.hard_samples[-self.max_hard_samples:]  # Define max_hard_samples
+                    if self.hard_samples:
+                        print(f"Epoch {epoch}: Training on hard samples - Max allowed = {self.max_hard_samples}, Current count = {len(self.hard_samples)}")
+                        self.train_on_hard_samples()
+                    
                 if epoch > 100 and epoch % 10 == 0:
                     if self.tt['LoRA']:
                         torch.save(
                             self.clip['m'].state_dict(), f'{self.model_prefix}_lora_model_{epoch}.pth'
                         )
+                    print(f"Evaluating Model at Epoch {epoch}")
                     self.eval(encoded_labels)
                     all_predictions, all_labels, acc = self.eval(encoded_labels,False)
                     print(f"Accuracy of baseline is {acc:.2f}% at epoch {epoch}")
@@ -69,11 +120,28 @@ class FinetuneCLIP():
 
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
                 if self.earlystop(encoded_labels):
+                    print(f"Early Stopping Triggered at Epoch {epoch}, Loading Best Model")
                     self.load_p()  # get parameters best found
                     return self.loss, self.train_p
                 pbar.set_postfix({"Patience": f"{self.es['curr_pat']} / {self.es['pat']}"})
                 pbar.update(1)
             return self.loss, self.train_p
+        
+    def train_on_hard_samples(self):
+        self.clip['m'].train()
+        #print(f"Training on hard samples: Max allowed = {self.max_hard_samples}, Current count = {len(self.hard_samples)}")
+        running_loss = 0.0
+        for image_embeds, labels in self.hard_samples:
+            self.optimizer.zero_grad()
+            encoded_labels = LabelEncoder().fit_transform(labels)
+            batch_class_weights = self.get_class_weights(labels, encoded_labels)
+            logits, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights=batch_class_weights, encoded_labels=encoded_labels)
+
+            loss.backward()
+            self.optimizer.step()
+            running_loss += loss.item()
+            print(labels)
+
 
     def forward(self, image_embeds, labels, balanced, class_weights = None, descriptions=None ,encoded_labels = None):
         """Get predictions of the model, add more here for different tuning methods"""
@@ -216,10 +284,14 @@ class FinetuneCLIP():
                         #curr, pat = self.es['curr_pat'], self.es['pat']
                         #print(f'Patience is {curr} / {pat}')
                         if self.es['curr_pat'] >= self.es['pat']:
+                            print(f"Early Stopping Triggered at Epoch {epoch}")
                             return 'STOP'
                     else:  # reset
-                        self.es['min_loss'] = np.inf
+                        #self.es['min_loss'] = np.inf
+                        self.es['min_loss'] = running_loss
                         self.es['curr_pat'] = 0
+                        print(f"Patience reset, New Min Loss = {self.es['min_loss']}")
+
 
     def plot_loss(self):
         plt.figure(figsize=(10, 6))
