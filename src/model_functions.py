@@ -139,19 +139,35 @@ def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights
     logits_per_image = torch.matmul(
         image_embeds, text_embeds.t()) * logit_scale
     loss = 0
-    if train:  # must have same ammount of text as images for training
-        #loss = clip_loss(logits_per_image.t())
-        # if balanced:
-        #     loss = clip_loss(logits_per_image.t())
-        #     #print("balanced")
-        # else:
-        #     #print("unbalanced")
-        #     #loss = clip_loss_default(device, logits_per_image.t())
-        #     loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights)
+    if train:  # must have same ammount of text as images for training       
         loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights, encoded_labels)
-    
+        #loss = clip_loss(logits_per_image.t())
+        
+        #targets = torch.arange(len(logits_per_image), device= device)
+        #loss = focal_losses(logits_per_image, targets, device, class_weights) <--- Focal Loss NOT Working due to gpu or smth...
 
     return logits_per_image, loss
+
+
+
+def focal_losses(inputs, targets, device, class_weights = None):
+    gamma=2.0
+    reduction = 'mean'
+    targets = targets.to(device)
+    inputs = inputs.to(device)
+    class_weights = class_weights.to(device)
+    ce_loss = F.cross_entropy(inputs, targets, reduction='none')
+    pt = torch.exp(-ce_loss)
+    focal_loss = (1 - pt) ** gamma * ce_loss
+
+    if class_weights is not None:
+        class_weights_tensor = class_weights[targets]
+        focal_loss = focal_loss * class_weights_tensor
+
+    if reduction == 'mean':
+        return focal_loss.mean()
+    else:
+        return focal_loss  
 
 def weighted_clip_loss(logits, labels, device, class_weights = None , encoded_labels = None):
     #tensor_labels = torch.tensor(labels)
