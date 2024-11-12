@@ -1,389 +1,396 @@
-import os
-os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 import torch
+import matplotlib.pyplot as plt
+import numpy as np
+from tqdm import tqdm
+import utils
+import model_functions
 import torch.nn as nn
-import torch.nn.functional as F
-from transformers.modeling_attn_mask_utils import _prepare_4d_attention_mask, _create_4d_causal_attention_mask
-from transformers.models.clip.modeling_clip import clip_loss
-from transformers.models.clip.processing_clip import CLIPProcessor
-from transformers.models.clip.tokenization_clip_fast import CLIPTokenizerFast
+import copy
+from sklearn.utils.class_weight import compute_class_weight
 from sklearn.preprocessing import LabelEncoder
+import time
 
 
-######################################################################################
+class FinetuneCLIP():
+    def __init__(self, dataloaders, clip, epochs=200):
+        self.dataloaders = dataloaders
+        # TODO decide if processor should have is_split_into_words = True
+        self.clip = clip  # model and processor
+        ## HARD MINING VARIABLES ##
+        self.hard_mining = False #False --> Disable Hard Mining
+        self.hard_sample_threshold = 50 #loss for hard samples
+        self.max_hard_samples = 500
+        self.hard_samples = []  # Track hard samples
+        ##########################
+        self.loss = {'train': [], 'val': []}
+        self.es = {'pat': 10, 'curr_pat': 0, 'min_loss': np.inf, 'best_model':clip['m']}  # early stop
+        self.conf = {'epochs': epochs, 'balanced':True}
+        self.train_p = {}  # Store trainable parameters here
+        self.tt = {'soft': 1, 'LoRA': 0, 'image_fc': 0, 'desc': 0}  # tuning method to use
+        self.optimizer = None  # config in initialize
+        self.image_fc = None  # config in initialize
+        self.device = torch.device(
+            "cuda" if torch.cuda.is_available() else "cpu")
+        self.model_prefix = ""
 
+    def train(self):
+        """Training loop"""
+        encoder = LabelEncoder()  
+        Debug = False
+        self.clip['m'].train()
+        with tqdm(total=self.conf['epochs'], desc="Training", unit="epoch") as pbar:
+            for epoch in range(self.conf['epochs']):
+                max_loss_in_epoch = -9999
+                epoch_hard_samples = []  # Initialize for each epoch
+                # Print the learning rate and number of parameters in the optimizer
+                lr = self.optimizer.param_groups[0]['lr']
+                num_params = sum(p.numel() for p in self.optimizer.param_groups[0]['params'])
+                ##DEBUG##
+                print(f"Epoch {epoch}: Optimizer - Learning Rate: {lr}, Number of Parameters: {num_params}")
+                ##DEBUG##
+                loss_values = []  # List to store loss values for the current epoch
+                running_loss, n_data, n_data = 0.0, 0, 0
+                if self.conf['balanced']:
+                    for batch_nr, (image_embeds, labels, _, _) in enumerate(self.dataloaders['train']):
+                        self.optimizer.zero_grad()
+                        encoded_labels = encoder.fit_transform(labels)
+                        batch_class_weights = self.get_class_weights(labels, encoded_labels)
+                        _, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights = batch_class_weights, encoded_labels = encoded_labels)
+                        loss.backward()
+                        self.optimizer.step()
+                        running_loss += loss.item()
+                else:
+                    for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
+                         ##DEBUG##
+                        if epoch > 20 and Debug:
+                            if batch_nr % 10 == 0: 
+                                print(f"Epoch {epoch}, Batch {batch_nr}: Memory Allocated = {torch.cuda.memory_allocated(self.device)}, Cached = {torch.cuda.memory_reserved(self.device)}")
+                            if len(np.unique(feature)) != 18:
+                                print(f"Epoch {epoch}, Batch {batch_nr}: Number of Unique Labels in Batch = {len(np.unique(feature))}")
+                            ##DEBUG##
+                        self.optimizer.zero_grad()
+                        encoded_labels = encoder.fit_transform(feature)
+                        batch_class_weights = self.get_class_weights(feature, encoded_labels)
+                        _, loss = self.forward(image_embeds, labels=feature, balanced=self.conf['balanced'], class_weights=batch_class_weights, encoded_labels = encoded_labels)
+                        # Hard Mining#
+                        max_loss_in_epoch = max(max_loss_in_epoch, loss.item())  # Update max loss
+                        loss_values.append(loss.item())
+                        if loss.item() > self.hard_sample_threshold:  
+                            epoch_hard_samples.append((image_embeds, feature))
+                        loss.backward()
+                        self.optimizer.step()
+                        running_loss += loss.detach().item()
+                        del image_embeds, article_ids, feature, detail_desc, loss
+                        torch.cuda.empty_cache()                  
+                
+                if self.hard_mining:
+                    
+                    if epoch % 10 == 0:
+                        #self.hard_sample_threshold = threshold
+                        loss_mean = np.mean(loss_values)
+                        loss_std = np.std(loss_values)
+                        threshold = loss_mean + 2 * loss_std
+                        self.hard_sample_threshold = max_loss_in_epoch * 0.8
+                        print(f"Suggested threshold for hard examples: {threshold}")
+                        print(f"Epoch {epoch}: Max loss encountered = {max_loss_in_epoch}, Hard sample threshold set to {self.hard_sample_threshold}")
+                    
+                    if epoch > 10 and self.loss['val'][-1] > self.loss['val'][-2]:  # Increase if validation loss rises
+                        self.max_hard_samples = min(len(self.dataloaders['train'].dataset), self.max_hard_samples + 20)
+                    elif epoch % 10 == 0 and self.max_hard_samples > 50:  # Reduce periodically if high
+                        self.max_hard_samples = max(50, self.max_hard_samples - 10)
+                    #hard_example_count = sum(loss > self.hard_sample_threshold for loss in loss_values)
+                    
+                    self.hard_samples.extend(epoch_hard_samples)
+                    self.hard_samples = self.hard_samples[-self.max_hard_samples:]  # Define max_hard_samples
+                    if self.hard_samples:
+                        print(f"Epoch {epoch}: Training on hard samples - Max allowed = {self.max_hard_samples}, Current count = {len(self.hard_samples)}")
+                        self.train_on_hard_samples()
+                    
+                if epoch > 100 and epoch % 10 == 0:
+                    if self.tt['LoRA']:
+                        torch.save(
+                            self.clip['m'].state_dict(), f'{self.model_prefix}_lora_model_{epoch}.pth'
+                        )
+                    print(f"Evaluating Model at Epoch {epoch}")
+                    self.eval(encoded_labels)
+                    all_predictions, all_labels, acc = self.eval(encoded_labels,False)
+                    print(f"Accuracy of baseline is {acc:.2f}% at epoch {epoch}")
+                    self.plot_loss_key('train', epoch)
+                    self.plot_loss_key('val', epoch)
 
-class LoraLayer(nn.Module):
-    def __init__(self, input_dim, output_dim, rank=4, alpha=16, dropout_rate=0.0):
-        super(LoraLayer, self).__init__()
-        self.rank = rank
-        self.alpha = alpha
-
-        self.W_A = nn.Parameter(torch.randn(input_dim, rank))
-        self.W_B = nn.Parameter(torch.randn(rank, output_dim))
-        # self.dropout = nn.Dropout(dropout_rate)
-
-    def forward(self, x):
-      # Forwad pass without ORIGINAL Layer
-        x = x.to(self.W_A.device)  # Move x to the same device as A and B
-
-        return x @ self.W_A @ self.W_B
-######################################################################################
-######################################################################################
-
-
-class LoRALayerAttn(nn.Module):
-    def __init__(self, original_attention_layer, r=64, alpha=1, layer=0):
-        super(LoRALayerAttn, self).__init__()
-        self.original_attention_layer = original_attention_layer
-
-        # in_features, out_features = original_layer.weight.size()
-        d_model = 512
-
-        # self.lora_A = nn.Parameter(torch.randn(r, d_model)).to(device)
-        # self.lora_B = nn.Parameter(torch.randn(d_model, r)).to(device)
-        # print("check")
-       # Create new lora_A and lora_B tensors for each layer
-        self.lora_A = nn.Parameter(torch.randn(r, d_model))
-        self.lora_B = nn.Parameter(torch.randn(d_model, r))
-
-        # Apply Xavier initialization
-        nn.init.xavier_uniform_(self.lora_A)
-        nn.init.xavier_uniform_(self.lora_B)
-        # Dynamically generate parameter names based on the layer index
-        a_string = 'lora_A' + str(layer)
-        b_string = 'lora_B' + str(layer)
-        # print(a_string)
-
-        # Register lora_A and lora_B as parameters for this specific layer
-        self.register_parameter(a_string, self.lora_A)
-        self.register_parameter(b_string, self.lora_B)
-
-        # Scaling factor
-        self.scaling = alpha
-
-    def forward(self, x):
-        # Forward pass with original layer and LoRA
-        # device = x.device  # Get the device of the input tensor
-
-        # Move Lora parameters to the correct device
-        # self.lora_A = self.lora_A.to(device)
-        # self.lora_B = self.lora_B.to(device)
-
-        # ensure lora_A and lora_B are on the same device as x
-        return self.original_attention_layer(x) + ((x @ self.lora_B.to(x.device) @ self.lora_A.to(x.device)) * self.scaling)
-######################################################################################
-
-# Needed to create the dataset
-
-
-def get_image_emb(model, processor: CLIPProcessor, images, normalize=True):
-    """Given an tensor of batch images returns the batch image embeddings [batch, 512]"""
-
-    # print(model.vision_model, processor.image_processor)
-    vision_model = model.vision_model  # VIT
-    image_processor = processor.image_processor  # standardise the input
-    visual_projection = model.visual_projection  # fc layer
-
-    # standardise, same shape as image
-    prosessed_images = image_processor(
-        images, return_tensors='pt')['pixel_values']
-
-    # apply VIT snd project to latent space  dim [batch, 768]
-    vision_latent = vision_model(prosessed_images.to(model.device))[
-        1]  # not same as text
-
-    # project to same dim as text emb by FC layer [batch, 512]
-    image_embeds = visual_projection(vision_latent)
-
-    # normalize so norm is one, good for dot product later
-    if normalize:
-        image_embeds /= image_embeds.norm(p=2, dim=-1, keepdim=True)
-
-    return image_embeds, prosessed_images
-
-
-def get_text_emb(model, processor: CLIPProcessor, text, normalize=True):
-    """Given an tensor of batch text returns the batch text embeddings [batch, 512],
-    define X as the number of tokens and might differ from text length"""
-    # print(model.text_model, processor.tokenizer)
-    text_model = model.text_model  # VIT
-    text_tokenizer: CLIPTokenizerFast = processor.tokenizer  # tokenize the input
-    text_projection = model.text_projection  # fc layer
-    # tokenize, returns 2 tensors, tokens and attention mask [batch, X]
-    tokenized_text = text_tokenizer(
-        text, return_tensors='pt', padding=True, truncation=True)
-    # apply TRANSFORMER and project to latent space  dim [batch, 512]
-    text_latent = text_model(**tokenized_text.to(model.device))[1]
-    # project to same dim as text emb by FC layer [batch, 512] unneccessary???
-    # [batch, 512] to [batch, 512] same
-    text_embeds = text_projection(text_latent)
-    # TODO add LORA
-    # normalize so norm is one, good for dot product later
-    return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True) if normalize else text_embeds
-
-def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights, encoded_labels, train=False, normalize_inputs=False):
-    """Forward pass of clip"""
-    #print(class_weights)
-
-    #encoder = LabelEncoder()
-    #encoded_labels = encoder.fit_transform(labels)
-    encoded_labels_tensor = torch.tensor(encoded_labels)
-    
-    if normalize_inputs:
-        text_embeds /= text_embeds.norm(p=2, dim=-1, keepdim=True)
-        image_embeds /= image_embeds.norm(p=2, dim=-1, keepdim=True)
-
-    device = model.device  # use gpu
-    logit_scale = model.logit_scale.exp().to(device)  # temperature param
-    text_embeds, image_embeds = text_embeds.to(device), image_embeds.to(device)
-    # TODO add LORA
-    logits_per_image = torch.matmul(
-        image_embeds, text_embeds.t()) * logit_scale
-    loss = 0
-    if train:  # must have same ammount of text as images for training       
-        loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights, encoded_labels)
-        #loss = clip_loss(logits_per_image.t())
-        #print(logits_per_image.shape)
-        #targets = torch.arange(len(logits_per_image), device= device)
-        ## FOCAL LOSS ##
-        #targets = torch.tensor(encoded_labels)
-        #logits_per_image = logits_per_image.index_select(1, targets.to(device)) 
-       
-        #unique_labels = torch.unique(encoded_labels_tensor).to(device) 
-        #logits_per_image = logits_per_image.index_select(1, unique_labels) 
-        #label_mapping = {label.item(): idx for idx, label in enumerate(unique_labels)}
-        #mapped_targets = torch.tensor([label_mapping[encoded_label] for encoded_label in encoded_labels], device=device)
+                self.loss['train'].append(running_loss/len(self.dataloaders['train']))
+                if self.earlystop(encoded_labels):
+                    print(f"Early Stopping Triggered at Epoch {epoch}, Loading Best Model")
+                    self.load_p()  # get parameters best found
+                    return self.loss, self.train_p
+                pbar.set_postfix({"Patience": f"{self.es['curr_pat']} / {self.es['pat']}"})
+                pbar.update(1)
+            return self.loss, self.train_p
         
-        #loss = focal_losses(logits_per_image, mapped_targets, device, class_weights) #<--- Focal Loss NOT Working due to gpu or smth...
-        ###################
-    return logits_per_image, loss
+    def train_on_hard_samples(self):
+        self.clip['m'].train()
+        #print(f"Training on hard samples: Max allowed = {self.max_hard_samples}, Current count = {len(self.hard_samples)}")
+        running_loss = 0.0
+        for image_embeds, labels in self.hard_samples:
+            self.optimizer.zero_grad()
+            encoded_labels = LabelEncoder().fit_transform(labels)
+            batch_class_weights = self.get_class_weights(labels, encoded_labels)
+            logits, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights=batch_class_weights, encoded_labels=encoded_labels)
+
+            loss.backward()
+            self.optimizer.step()
+            running_loss += loss.item()
+            #print(labels)
 
 
-
-def focal_losses(inputs, targets, device, class_weights=None):
-    gamma = 2.0
-    reduction = 'mean'
-    targets = targets.to(device)
-    inputs = inputs.to(device)
-
-    if class_weights is not None:
-        class_weights = class_weights.to(device)
-
-    # Print shapes and device information for debugging
-    #print(f"Inputs shape: {inputs.shape}, device: {inputs.device}")
-    #print(f"Targets shape: {targets.shape}, device: {targets.device}")
-    #if class_weights is not None:
-    #    print(f"Class weights shape: {class_weights.shape}, device: {class_weights.device}")
-
-    # Print a few values to verify ranges
-    #print(f"Targets (first 10): {targets[:10]}")
-    #print(f"Class weights (first 10 if available): {class_weights[:10] if class_weights is not None else 'None'}")
-
-    ce_loss = F.cross_entropy(inputs, targets, reduction='none')
-    pt = torch.exp(-ce_loss)
-    focal_loss = (1 - pt) ** gamma * ce_loss
-
-    if class_weights is not None:
-        class_weights_tensor = class_weights[targets]
-        focal_loss = focal_loss.to(device) * class_weights_tensor
-
-    if reduction == 'mean':
-        return focal_loss.mean()
-    else:
-        return focal_loss
-
-def weighted_clip_loss(logits, labels, device, class_weights = None , encoded_labels = None):
-    #tensor_labels = torch.tensor(labels)
-    
-    #encoder = LabelEncoder()
-    #encoded_labels = encoder.fit_transform(labels)
-    encoded_labels_tensor = torch.tensor(encoded_labels)
-    
-    if class_weights is not None:
+    def forward(self, image_embeds, labels, balanced, class_weights = None, descriptions=None ,encoded_labels = None):
+        """Get predictions of the model, add more here for different tuning methods"""
+        train = True if image_embeds.shape[0] == len(labels) else False
+        texts = []
         
-        #loss = clip_loss_default(device, logits.t())
-        loss = clip_loss(logits.t())
-        class_weights = class_weights.to(device)
-        weighted_loss = loss * class_weights[encoded_labels_tensor.to(device)]
-        #print(weighted_loss)
-        return weighted_loss.mean()
-    else:
-        return clip_loss(logits.t())
-    
-def weighted_clip_loss_seperated(device, similarity: torch.Tensor, labels: torch.Tensor, class_weights=None):
-    if class_weights is not None:
-        caption_loss = contrastive_loss(device, similarity)
-        image_loss = contrastive_loss(device, similarity.t())
+        if descriptions and self.tt['desc']:
+            for desc in descriptions:
+                new_text =\
+                    [f'An image of clothing with name: {label}, and description: {desc}' for label in labels]
+                texts.append(new_text)
+        else:
+            texts = [self.train_p['add']+i for i in labels]
+
+        # image_embeds, _ = get_image_emb(model, processor, return_normal(images, processor, 0, False)) #SLOW
+
+        # image_fc is just adding a fc layer to the image embeddings
+        # so we can do that before soft and lora because they are only applied to text
+        if self.tt['image_fc']:
+            image_embeds = self.image_fc(image_embeds)
+        if self.tt['soft']:
+            text_embeds = model_functions.get_text_emb_soft(
+                self.clip['m'], self.clip['p'], texts, self.train_p['soft'])
+        elif self.tt['desc']:
+            assert descriptions is not None
+            embs = []
+            for text in texts:
+                embs.append(model_functions.get_text_emb(
+                    self.clip['m'], self.clip['p'], text))
+            text_embeds = torch.cat(embs)
+        else:
+            text_embeds = model_functions.get_text_emb(
+                self.clip['m'], self.clip['p'], texts)
+
+        logits_per_image, loss = model_functions.apply_clip(
+            text_embeds, image_embeds,
+            self.clip['m'], balanced=balanced,
+            train=train, labels=labels,
+            class_weights=class_weights,
+            encoded_labels = encoded_labels
+        )
+
+        return logits_per_image, loss
+
+    def eval(self, encoded_labels = None, show_image=False):
+        """Evaluate model on test set"""
+        encoder = LabelEncoder() 
+        all_predictions, all_labels = [], []
+        with torch.no_grad():
+            if self.conf['balanced']:
+                for batch_nr, (image_embeds, labels, _, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
+                    encoded_labels = encoder.fit_transform(flabels)
+                    batch_class_weights = self.get_class_weights(labels, encoded_labels)
+                    logits_per_image, _ = self.forward(
+                        image_embeds,
+                        self.dataloaders['test'].dataset.classes,
+                        self.conf['balanced'],
+                        class_weights=batch_class_weights,
+                        descriptions=detail_desc
+                        )
+
+                    # probs = logits_per_image.softmax(dim=-1).cpu().numpy()
+                    predicted_class = logits_per_image.argmax(dim=-1)
+                    all_predictions.append(predicted_class)
+                    for lab in labels:
+                        all_labels.append(
+                            self.dataloaders['test'].dataset.class_to_id[lab])
+            else:
+                for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
+                    encoded_labels = encoder.fit_transform(feature)
+                    batch_class_weights = self.get_class_weights(feature, encoded_labels)
+                    logits_per_image, _ = self.forward(
+                        image_embeds,
+                        self.dataloaders['test'].dataset.classes,
+                        self.conf['balanced'],
+                        class_weights=batch_class_weights,
+                        descriptions=detail_desc,
+                        encoded_labels = encoded_labels
+                        )
+
+                    predicted_class = logits_per_image.argmax(dim=-1)
+                    all_predictions.append(predicted_class)
+                    for lab in feature:
+                        all_labels.append(
+                            self.dataloaders['test'].dataset.class_to_id[lab])
+                   
+        all_predictions, all_labels = torch.cat(
+            all_predictions).cpu(), torch.tensor(all_labels).cpu()
+        acc = utils.accuracy(all_predictions, all_labels)
+        print('Accuracy', acc)
+        return all_predictions, all_labels, acc
+
+    def earlystop(self, encoded_labels = None, epoch=None):
+        encoder = LabelEncoder() 
+        """Stop training when val loss start to increase"""
+        with torch.no_grad():
+            running_loss = 0.0  # last batch can be smaller
+            # val loader
+            if self.conf['balanced']:
+                for batch_nr, (image_embeds, labels, _,_) in enumerate(self.dataloaders['val']):
+                    #_, loss = self.forward(image_embeds, labels)
+                    encoded_labels = encoder.fit_transform(labels)
+                    batch_class_weights = self.get_class_weights(labels, encoded_labels)
+                    _, loss = self.forward(image_embeds, labels, self.conf['balanced'], class_weights = batch_class_weights, encoded_labels = encoded_labels)
+
+                    running_loss += loss.item()
+            else:
+                for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(self.dataloaders['train']):
+                    #_, loss = self.forward(image_embeds, feature)
+                    encoded_labels = encoder.fit_transform(feature)
+                    batch_class_weights = self.get_class_weights(feature, encoded_labels)
+                    _, loss = self.forward(image_embeds, feature, self.conf['balanced'], class_weights = batch_class_weights, encoded_labels = encoded_labels)
+                    running_loss += loss.item()
+
+            self.loss['val'].append(running_loss/len(self.dataloaders['val']))
+            # write loss to file
+            with open(f'{self.model_prefix}_loss.txt', 'a') as f:
+                f.write(f'{running_loss/len(self.dataloaders["val"])}\n')
+
+            if len(self.loss['val']) > 2:  # early stop
+                if self.es['curr_pat'] == 0:
+                    # if val_loss increase first time
+                    if running_loss > self.loss['val'][-2]:
+                        self.es['min_loss'] = running_loss
+                        self.es['best_model'] = copy.deepcopy(self.clip['m'])
+                        print('Current best epoch:', epoch)
+                        if self.tt['soft']:
+                            torch.save(
+                                self.train_p['soft'], f'{self.model_prefix}_soft.pth')
+                        if self.tt['LoRA']:
+                            torch.save(
+                                self.clip['m'].state_dict(), f'{self.model_prefix}_lora.pth'
+                            )
+                        
+                        self.es['curr_pat'] += 1
+                else:
+                    # if val_loss continute to increase
+                    if running_loss > self.es['min_loss']:
+                        self.es['curr_pat'] += 1
+                        #curr, pat = self.es['curr_pat'], self.es['pat']
+                        #print(f'Patience is {curr} / {pat}')
+                        if self.es['curr_pat'] >= self.es['pat']:
+                            print(f"Early Stopping Triggered at Epoch {epoch}")
+                            return 'STOP'
+                    else:  # reset
+                        #self.es['min_loss'] = np.inf
+                        self.es['min_loss'] = running_loss
+                        self.es['curr_pat'] = 0
+                        print(f"Patience reset, New Min Loss = {self.es['min_loss']}")
+
+
+    def plot_loss(self):
+        plt.figure(figsize=(10, 6))
+        plt.plot(list(range(1, len(self.loss['train'])+1)),
+                 self.loss['train'], label='Training Loss')
+        plt.plot(list(range(1, len(self.loss['val'])+1)),
+                 self.loss['val'], label='Validation Loss')
         
-        weighted_caption_loss = caption_loss * class_weights[labels]
-        weighted_image_loss = image_loss * class_weights[labels]
+        # Adding labels and title
+        plt.title('Loss Over Datapoints')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
         
-        return (weighted_caption_loss.mean() + weighted_image_loss.mean()) / 2.0
-    else:
-        return clip_loss(logits_per_image.t())  
-    
-def clip_loss_default(device, similarity: torch.Tensor) -> torch.Tensor:
-    caption_loss = contrastive_loss(device, similarity)
-    image_loss = contrastive_loss(device,similarity.t())
-    return (caption_loss + image_loss) / 2.0
-                                
-def contrastive_loss(device , logits: torch.Tensor) -> torch.Tensor:
-    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
+    def plot_loss_key(self, key, epoch):
+        plt.figure(figsize=(10, 6))
+        plt.plot(list(range(1, len(self.loss[key])+1)),
+                 self.loss[key], label=f'{key} Loss')
+        # Adding labels and title
+        plt.title('Loss Over Datapoints')
+        plt.xlabel('Epochs')
+        plt.ylabel('Loss')
+        plt.legend()
+        plt.grid(True)
+        plt.show()
+        plt.savefig(f'{self.model_prefix}_{key}_loss_{epoch}.png')
 
 
-def get_text_emb_soft(model, processor: CLIPProcessor, text, soft_prompt_hidden):
-    """Just like get_text_emb but for sof prompts,
-    define X as the number of tokens and might differ from text length"""
-    device = model.device
-    # print(model.text_model, processor.tokenizer)
-    text_model = model.text_model  # VIT original
-    text_tokenizer = processor.tokenizer  # tokenize the input
-    text_projection = model.text_projection  # fc layer
-    # OBS this is the inner embedding NOT the one we want
-    text_embedder_inner = text_model.embeddings
-    # tokenize the text, returns 2 tensors, tokens and attention mask [batch,X+soft]# token len not same as text
-    # returns tokens and attention mask
-    tokenized_text = text_tokenizer(
-        text, return_tensors='pt', padding=True, truncation=True)
-    # add soft prompt--------------
-    # Take out the parts
-    input_ids, attention_mask = tokenized_text['input_ids'].to(
-        device), tokenized_text['attention_mask'].to(device)
-    attention_mask = attention_mask
-    # get only hiddden states, this is before textTransformer is applied
-    # torch.Size([batch_size, X, 512])
-    hidden_states = text_embedder_inner(input_ids)
-    batch_size = hidden_states.size(0)
-    # adding vectors to the embedding torch.Size([4, X+softprompts, 512])
-    expand_hidden = soft_prompt_hidden.unsqueeze(0).expand(batch_size, -1, -1)
-    hidden_states = torch.cat([expand_hidden.to(device), hidden_states], dim=1)
-    # must match the shape
-    soft_prompt_attention_mask = torch.ones(
-        batch_size, soft_prompt_hidden.shape[0], dtype=attention_mask.dtype)
-    attention_mask = torch.cat([soft_prompt_attention_mask.to(
-        device), attention_mask], dim=1)  # just ones
-    # end of soft prompt--------------
-    # apply costum transformer snd project to latent space  dim [batch, 512]
-    text_latent = forward_text(
-        input_ids, attention_mask, hidden_states, text_model)
-    # project to same dim as text emb by FC layer [batch, 512] unneccessary???
-    # [batch, 512] to [batch, 512] same
-    text_embeds = text_projection(text_latent)
-    # TODO add LORA
-    # normalize so norm is one, good for dot product later
-    return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
+    def load_p(self, file_name=None):
+        """Load trained parameters, add more here"""
+        self.clip['m'] = self.es['best_model'] # the parameters at minimum
+        if self.tt['soft']:
+            file_name = f'{self.model_prefix}_soft.pth' if file_name is None else file_name
+            self.train_p['soft'] = torch.load(file_name)
+        elif self.tt['LoRA']:
+            file_name = f'{self.model_prefix}_lora.pth' if file_name is None else file_name
+            self.clip['m'].load_state_dict(torch.load(file_name))
+        else:
+            raise Exception('Need to specify file_name or have a tuning method')
 
+    def initialize(self, params, load=False, file_name=None):
+        """Initialize trainable parameters"""
+        added_text = params.get('add', '')
 
-def get_text_emb_soft_loralt(model, processor: CLIPProcessor, text, soft_prompt_hidden, text_lora_layer):
-    """Just like get_text_emb but for sof prompts,
-    define X as the number of tokens and might differ from text length"""
-    # print(model.text_model, processor.tokenizer)
-    device = model.device
-    text_model = model.text_model  # VIT original
-    text_tokenizer = processor.tokenizer  # tokenize the input
-    text_projection = model.text_projection  # fc layer
-    # OBS this is the inner embedding NOT the one we want
-    text_embedder_inner = text_model.embeddings
-    # tokenize the text, returns 2 tensors, tokens and attention mask [batch,X+soft]# token len not same as text
-    # returns tokens and attention mask
-    tokenized_text = text_tokenizer(
-        text, return_tensors='pt', padding=True, truncation=True)
-    # add soft prompt--------------
-    # Take out the parts
-    input_ids, attention_mask = tokenized_text['input_ids'].to(
-        device), tokenized_text['attention_mask'].to(device)
-    attention_mask = attention_mask
-    # get only hiddden states, this is before textTransformer is applied
-    # torch.Size([batch_size, X, 512])
-    hidden_states = text_embedder_inner(input_ids)
-    batch_size = hidden_states.size(0)
-    # adding vectors to the embedding torch.Size([4, X+softprompts, 512])
-    expand_hidden = soft_prompt_hidden.unsqueeze(0).expand(batch_size, -1, -1)
-    hidden_states = torch.cat([expand_hidden.to(device), hidden_states], dim=1)
-    # must match the shape
-    soft_prompt_attention_mask = torch.ones(
-        batch_size, soft_prompt_hidden.shape[0], dtype=attention_mask.dtype)
-    attention_mask = torch.cat([soft_prompt_attention_mask.to(
-        device), attention_mask], dim=1)  # just ones
-    # end of soft prompt--------------
-    # apply costum transformer snd project to latent space  dim [batch, 512]
-    text_latent = forward_text(
-        input_ids, attention_mask, hidden_states, text_model)
-    # project to same dim as text emb by FC layer [batch, 512] unneccessary???
+        self.train_p['add'] = added_text  # the text added to classes
+        tunable_params = []
+        # default values are same as pytorch adam default
+        lr = params.get('lr', 1e-3)
+        weight_decay = params.get('weight_decay', 0)
 
-    # Almost same thing as adding Lora to Last Transform Layer in projection attention layer
-    # we can remove this if we want and just add it in the loop when creating Lora layers for the attention layers
-    text_latent = text_lora_layer(text_latent)
-    # [batch, 512] to [batch, 512] same
-    text_embeds = text_projection(text_latent)
-    # normalize so norm is one, good for dot product later
-    return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True)
+        if self.tt['soft']:
+            if not load:
+                self.train_p['soft'] = nn.Parameter(torch.zeros(params['num_soft'],
+                                                    self.clip['m'].text_projection.in_features), requires_grad=True)
+                tunable_params.append(self.train_p['soft'])
+                assert self.train_p['soft'].is_leaf == tunable_params[0].is_leaf
+            else:
+                self.load_p() # load stored parameters
+                tunable_params.append(self.train_p['soft'])
 
+        if self.tt['image_fc']:
+            self.image_fc = nn.Linear(512, 512).to(self.device)
+            tunable_params += list(self.image_fc.parameters())
 
-def forward_text(input_ids, attention_mask, hidden_states, text_model):
-    """Modified forward pass of the text model TRANSFORMER to include soft prompts"""
-    # print(text_model) # prints the architecture
-    num_soft = hidden_states.shape[1]-input_ids.shape[1]
-    input_shape = input_ids.size()
+        if self.tt['LoRA']:
+            if load:
+                self.load_p(file_name=file_name) # load stored parameters
+                lora_params_attention = model_functions.get_lora_params(
+                   self.clip['m'], print_layer=False
+                )
+                tunable_params += list(lora_params_attention)
+            else:
+                self.train_p['LoRA'] = params['LoRA']
+                tunable_params += list(params['LoRA'])
 
-    causal_attention_mask = _create_4d_causal_attention_mask(
-        (hidden_states.shape[0], hidden_states.shape[1]), hidden_states.dtype, device=hidden_states.device)
-    if attention_mask is not None and not text_model._use_flash_attention_2:
-        attention_mask = _prepare_4d_attention_mask(
-            attention_mask, hidden_states.dtype)
+        # Add more options here if you need to
+        if tunable_params:
+            self.optimizer = torch.optim.Adam(
+                tunable_params, lr=lr, weight_decay=weight_decay)
 
-    encoder_outputs = text_model.encoder(
-        inputs_embeds=hidden_states,
-        attention_mask=attention_mask,
-        causal_attention_mask=causal_attention_mask)
-    last_hidden_state = encoder_outputs[0]
-    last_hidden_state = text_model.final_layer_norm(last_hidden_state)
-    # remove prompt states
-    last_hidden_state = last_hidden_state[:, num_soft:, :]
-    pooled_output = last_hidden_state[
-        torch.arange(last_hidden_state.shape[0],
-                     device=last_hidden_state.device),
-        input_ids.view(-1, input_shape[-1]).to(dtype=torch.int, device=last_hidden_state.device).argmax(dim=-1),]
-    return pooled_output
+    def count_parameters(self):
+        if self.optimizer is None or not self.optimizer.param_groups:
+            print("Optimizer has no parameters")
+            return
 
+        num_params = sum(p.numel()
+                         for p in self.optimizer.param_groups[0]['params'])
+        print(f'Total number of parameters in the optimizer: {num_params}')
 
-def apply_lora_to_transformer(transformer_layers, lora_layers, ranks):
-    # Ranks is a list where each index represent the specific transformation layer and the Int represent the rank of the new lora layer
-
-    for i, layer in enumerate(transformer_layers):
-        rank = ranks[i]
-
-        if rank > 0:  # Apply LoRA only if rank > 0
-            layer.self_attn.q_proj = LoRALayerAttn(
-                original_attention_layer=layer.self_attn.q_proj, r=rank)
-            layer.self_attn.k_proj = LoRALayerAttn(
-                original_attention_layer=layer.self_attn.k_proj, r=rank)
-            layer.self_attn.v_proj = LoRALayerAttn(
-                original_attention_layer=layer.self_attn.v_proj, r=rank)
-            layer.self_attn.out_proj = LoRALayerAttn(
-                original_attention_layer=layer.self_attn.out_proj, r=rank)
-
-            # Store the applied LoRA layers for each projection
-            lora_layers.extend([
-                layer.self_attn.q_proj,
-                layer.self_attn.k_proj,
-                layer.self_attn.v_proj,
-                layer.self_attn.out_proj
-            ])
-
-    return lora_layers
-
-
-def get_lora_params(model, print_layer=True):
-    for param in model.parameters():
-        param.requires_grad = False
-    for name, param in model.named_parameters():
-        if 'lora' in name:
-            if print_layer:
-                print(name)
-            param.requires_grad = True
-
-    lora_params_attention = [
-        param for param in model.parameters() if param.requires_grad]
-    return lora_params_attention
+    def get_class_weights(self,labels , encoded_labels):
+        if not self.conf['balanced']:
+            #encoder = LabelEncoder()
+            #encoded_labels = encoder.fit_transform(labels)
+            encoded_labels_tensor = torch.tensor(encoded_labels)
+            classes = torch.unique(encoded_labels_tensor)
+            class_weights = compute_class_weight(class_weight = 'balanced' , classes = classes.cpu().numpy(), y = encoded_labels)
+            class_weights = torch.tensor(class_weights, dtype = torch.float32, device= encoded_labels_tensor.device)
+        else:
+            class_weights = None
+        return class_weights
