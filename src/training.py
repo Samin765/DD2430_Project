@@ -120,7 +120,7 @@ class FinetuneCLIP():
                     self.plot_loss_key('val', epoch)
 
                 self.loss['train'].append(running_loss/len(self.dataloaders['train']))
-                if self.earlystop(encoded_labels):
+                if self.earlystop(encoded_labels, epoch):
                     print(f"Early Stopping Triggered at Epoch {epoch}, Loading Best Model")
                     self.load_p()  # get parameters best found
                     return self.loss, self.train_p
@@ -269,7 +269,6 @@ class FinetuneCLIP():
                     if running_loss > self.loss['val'][-2]:
                         self.es['min_loss'] = running_loss
                         self.es['best_model'] = copy.deepcopy(self.clip['m'])
-                        print('Current best epoch:', epoch)
                         if self.tt['soft']:
                             torch.save(
                                 self.train_p['soft'], f'{self.model_prefix}_soft.pth')
