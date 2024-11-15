@@ -120,7 +120,7 @@ def get_text_emb(model, processor: CLIPProcessor, text, normalize=True):
     # normalize so norm is one, good for dot product later
     return text_embeds / text_embeds.norm(p=2, dim=-1, keepdim=True) if normalize else text_embeds
 
-def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights, encoded_labels, train=False, normalize_inputs=False):
+def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights, encoded_labels, train=False, normalize_inputs=False, weighted=True):
     """Forward pass of clip"""
     #print(class_weights)
 
@@ -140,8 +140,10 @@ def apply_clip(text_embeds, image_embeds, model, balanced, labels, class_weights
         image_embeds, text_embeds.t()) * logit_scale
     loss = 0
     if train:  # must have same ammount of text as images for training       
-        loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights, encoded_labels)
-        #loss = clip_loss(logits_per_image.t())
+        if weighted:
+            loss = weighted_clip_loss(logits_per_image.t(), labels, device, class_weights, encoded_labels)
+        else:
+            loss = clip_loss(logits_per_image.t())
         
         #targets = torch.arange(len(logits_per_image), device= device)
         #loss = focal_losses(logits_per_image, targets, device, class_weights) <--- Focal Loss NOT Working due to gpu or smth...

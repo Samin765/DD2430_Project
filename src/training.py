@@ -18,6 +18,7 @@ class FinetuneCLIP():
         self.clip = clip  # model and processor
         ## HARD MINING VARIABLES ##
         self.hard_mining = False #False --> Disable Hard Mining
+        self.weighted = True
         self.hard_sample_threshold = 50 #loss for hard samples
         self.max_hard_samples = 500
         self.hard_samples = []  # Track hard samples
@@ -181,7 +182,8 @@ class FinetuneCLIP():
             self.clip['m'], balanced=balanced,
             train=train, labels=labels,
             class_weights=class_weights,
-            encoded_labels = encoded_labels
+            encoded_labels = encoded_labels,
+            weighted=self.weighted
         )
 
         return logits_per_image, loss
