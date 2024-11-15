@@ -47,7 +47,7 @@ class FinetuneCLIP():
                 lr = self.optimizer.param_groups[0]['lr']
                 num_params = sum(p.numel() for p in self.optimizer.param_groups[0]['params'])
                 ##DEBUG##
-                print(f"Epoch {epoch}: Optimizer - Learning Rate: {lr}, Number of Parameters: {num_params}")
+                # print(f"Epoch {epoch}: Optimizer - Learning Rate: {lr}, Number of Parameters: {num_params}")
                 ##DEBUG##
                 loss_values = []  # List to store loss values for the current epoch
                 running_loss, n_data, n_data = 0.0, 0, 0
@@ -107,7 +107,7 @@ class FinetuneCLIP():
                         print(f"Epoch {epoch}: Training on hard samples - Max allowed = {self.max_hard_samples}, Current count = {len(self.hard_samples)}")
                         self.train_on_hard_samples()
                     
-                if epoch > 100 and epoch % 10 == 0:
+                if epoch > 70 and epoch % 10 == 0:
                     if self.tt['LoRA']:
                         torch.save(
                             self.clip['m'].state_dict(), f'{self.model_prefix}_lora_model_{epoch}.pth'
@@ -292,7 +292,7 @@ class FinetuneCLIP():
                         #self.es['min_loss'] = np.inf
                         self.es['min_loss'] = running_loss
                         self.es['curr_pat'] = 0
-                        print(f"Patience reset, New Min Loss = {self.es['min_loss']}")
+                        # print(f"Patience reset, New Min Loss = {self.es['min_loss']}")
 
 
     def plot_loss(self):
