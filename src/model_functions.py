@@ -171,6 +171,17 @@ def focal_losses(inputs, targets, device, class_weights = None):
     else:
         return focal_loss  
 
+        
+# contrastive loss function, adapted from
+# https://sachinruk.github.io/blog/2021-03-07-clip.html
+def contrastive_loss_our(logits: torch.Tensor, weights) -> torch.Tensor:
+    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device, weight=weights))
+
+def clip_loss_our(similarity: torch.Tensor, weights) -> torch.Tensor:
+    caption_loss = contrastive_loss_our(similarity, weights)
+    image_loss = contrastive_loss_our(similarity.t(), weights)
+    return (caption_loss + image_loss) / 2.0
+
 def weighted_clip_loss(logits, labels, device, class_weights = None , encoded_labels = None):
     #tensor_labels = torch.tensor(labels)
     
@@ -181,23 +192,26 @@ def weighted_clip_loss(logits, labels, device, class_weights = None , encoded_la
     if class_weights is not None:
         
         #loss = clip_loss_default(device, logits.t())
-        loss = clip_loss(logits.t())
-
-        print(loss)
-
         class_weights = class_weights.to(device)
-        weighted_loss = loss * class_weights[encoded_labels_tensor.to(device)]
+        print("class weights", class_weights)
+        unweighted = clip_loss(logits.t())
+        weighted_loss = clip_loss_our(logits.t(), weights=class_weights)
+
+        # class_weights = class_weights.to(device)
+        # weighted_loss = loss * class_weights[encoded_labels_tensor.to(device)]
         #print(weighted_loss)
-        weighted_mean = weighted_loss.mean()
-        print("loss", loss, "weighted loss ", weighted_mean)
-        return weighted_mean
+        # weighted_mean = weighted_loss.mean()
+        print("unweighted loss", unweighted)
+        print("weigted loss", weighted_loss)
+
+        return weighted_loss
     else:
-        return clip_loss(logits.t())
+        return clip_loss_our(logits.t())
     
 def weighted_clip_loss_seperated(device, similarity: torch.Tensor, labels: torch.Tensor, class_weights=None):
     if class_weights is not None:
-        caption_loss = contrastive_loss(device, similarity)
-        image_loss = contrastive_loss(device, similarity.t())
+        caption_loss = contrastive_loss_our(device, similarity)
+        image_loss = contrastive_loss_our(device, similarity.t())
         
         weighted_caption_loss = caption_loss * class_weights[labels]
         weighted_image_loss = image_loss * class_weights[labels]
@@ -207,11 +221,11 @@ def weighted_clip_loss_seperated(device, similarity: torch.Tensor, labels: torch
         return clip_loss(logits_per_image.t())  
     
 def clip_loss_default(device, similarity: torch.Tensor) -> torch.Tensor:
-    caption_loss = contrastive_loss(device, similarity)
-    image_loss = contrastive_loss(device,similarity.t())
+    caption_loss = contrastive_loss_our(device, similarity)
+    image_loss = contrastive_loss_our(device,similarity.t())
     return (caption_loss + image_loss) / 2.0
                                 
-def contrastive_loss(device , logits: torch.Tensor) -> torch.Tensor:
+def contrastive_loss_our(device , logits: torch.Tensor) -> torch.Tensor:
     return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
 
 

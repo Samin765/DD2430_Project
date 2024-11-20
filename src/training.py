@@ -195,7 +195,7 @@ class FinetuneCLIP():
         with torch.no_grad():
             if self.conf['balanced']:
                 for batch_nr, (image_embeds, labels, _, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
-                    encoded_labels = encoder.fit_transform(flabels)
+                    encoded_labels = encoder.fit_transform(labels)
                     batch_class_weights = self.get_class_weights(labels, encoded_labels)
                     logits_per_image, _ = self.forward(
                         image_embeds,
@@ -215,6 +215,7 @@ class FinetuneCLIP():
                 for batch_nr, (image_embeds, article_ids, feature, detail_desc) in enumerate(tqdm(self.dataloaders['test'])):
                     encoded_labels = encoder.fit_transform(feature)
                     batch_class_weights = self.get_class_weights(feature, encoded_labels)
+                    print("batch class weights", batch_class_weights)
                     logits_per_image, _ = self.forward(
                         image_embeds,
                         self.dataloaders['test'].dataset.classes,
@@ -386,6 +387,7 @@ class FinetuneCLIP():
 
     def get_class_weights(self,labels , encoded_labels):
         if not self.conf['balanced']:
+            print('not balanced')
             #encoder = LabelEncoder()
             #encoded_labels = encoder.fit_transform(labels)
             encoded_labels_tensor = torch.tensor(encoded_labels)
