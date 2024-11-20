@@ -182,10 +182,15 @@ def weighted_clip_loss(logits, labels, device, class_weights = None , encoded_la
         
         #loss = clip_loss_default(device, logits.t())
         loss = clip_loss(logits.t())
+
+        print(loss)
+
         class_weights = class_weights.to(device)
         weighted_loss = loss * class_weights[encoded_labels_tensor.to(device)]
         #print(weighted_loss)
-        return weighted_loss.mean()
+        weighted_mean = weighted_loss.mean()
+        print("loss", loss, "weighted loss ", weighted_mean)
+        return weighted_mean
     else:
         return clip_loss(logits.t())
     
