@@ -174,12 +174,14 @@ def focal_losses(inputs, targets, device, class_weights = None):
         
 # contrastive loss function, adapted from
 # https://sachinruk.github.io/blog/2021-03-07-clip.html
-def contrastive_loss_our(logits: torch.Tensor, weights) -> torch.Tensor:
-    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device, weight=weights))
+def contrastive_loss_weighted(logits: torch.Tensor, weights) -> torch.Tensor:
+    print("was it called?")
+    return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device), weight=weights)
 
-def clip_loss_our(similarity: torch.Tensor, weights) -> torch.Tensor:
-    caption_loss = contrastive_loss_our(similarity, weights)
-    image_loss = contrastive_loss_our(similarity.t(), weights)
+def clip_loss_weighted(similarity: torch.Tensor, weights) -> torch.Tensor:
+    print("was it called?")
+    caption_loss = contrastive_loss_weighted(similarity, weights)
+    image_loss = contrastive_loss_weighted(similarity.t(), weights)
     return (caption_loss + image_loss) / 2.0
 
 def weighted_clip_loss(logits, labels, device, class_weights = None , encoded_labels = None):
@@ -195,7 +197,7 @@ def weighted_clip_loss(logits, labels, device, class_weights = None , encoded_la
         class_weights = class_weights.to(device)
         print("class weights", class_weights)
         unweighted = clip_loss(logits.t())
-        weighted_loss = clip_loss_our(logits.t(), weights=class_weights)
+        weighted_loss = clip_loss_weighted(logits.t(), weights=class_weights)
 
         # class_weights = class_weights.to(device)
         # weighted_loss = loss * class_weights[encoded_labels_tensor.to(device)]
@@ -227,7 +229,6 @@ def clip_loss_default(device, similarity: torch.Tensor) -> torch.Tensor:
                                 
 def contrastive_loss_our(device , logits: torch.Tensor) -> torch.Tensor:
     return nn.functional.cross_entropy(logits, torch.arange(len(logits), device=logits.device))
-
 
 def get_text_emb_soft(model, processor: CLIPProcessor, text, soft_prompt_hidden):
     """Just like get_text_emb but for sof prompts,
